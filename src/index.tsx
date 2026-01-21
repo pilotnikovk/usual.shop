@@ -497,6 +497,57 @@ app.put('/api/admin/settings', async (c) => {
   }
 })
 
+// Admin Categories CRUD
+app.get('/api/admin/categories', async (c) => {
+  try {
+    const result = await c.env.DB.prepare('SELECT * FROM categories ORDER BY sort_order').all()
+    return c.json({ success: true, data: result.results })
+  } catch (e) {
+    return c.json({ success: false, error: 'Failed to fetch categories' }, 500)
+  }
+})
+
+app.post('/api/admin/categories', async (c) => {
+  try {
+    const { name, slug, description, seo_title, seo_description, seo_keywords, image_url, sort_order, is_active } = await c.req.json()
+    
+    const result = await c.env.DB.prepare(`
+      INSERT INTO categories (name, slug, description, seo_title, seo_description, seo_keywords, image_url, sort_order, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(name, slug, description || '', seo_title || '', seo_description || '', seo_keywords || '', image_url || '', sort_order || 0, is_active ? 1 : 0).run()
+    
+    return c.json({ success: true, id: result.meta.last_row_id })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message || 'Failed to create category' }, 500)
+  }
+})
+
+app.put('/api/admin/categories/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const { name, slug, description, seo_title, seo_description, seo_keywords, image_url, sort_order, is_active } = await c.req.json()
+    
+    await c.env.DB.prepare(`
+      UPDATE categories SET name = ?, slug = ?, description = ?, seo_title = ?, seo_description = ?, seo_keywords = ?, image_url = ?, sort_order = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(name, slug, description || '', seo_title || '', seo_description || '', seo_keywords || '', image_url || '', sort_order || 0, is_active ? 1 : 0, id).run()
+    
+    return c.json({ success: true })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message || 'Failed to update category' }, 500)
+  }
+})
+
+app.delete('/api/admin/categories/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run()
+    return c.json({ success: true })
+  } catch (e) {
+    return c.json({ success: false, error: 'Failed to delete category' }, 500)
+  }
+})
+
 // ==========================================
 // STATIC FILES
 // ==========================================
@@ -1315,91 +1366,148 @@ app.get('/admin/login', async (c) => {
 </html>`)
 })
 
-// Admin panel
+// Admin panel - Full CMS
 app.get('/admin', async (c) => {
+  // Load categories for product form
+  let categories: any[] = []
+  try {
+    const result = await c.env.DB.prepare('SELECT * FROM categories ORDER BY sort_order').all()
+    categories = result.results || []
+  } catch (e) {}
+  
+  const categoriesJson = JSON.stringify(categories)
+  
   return c.html(`<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Админ-панель | Armata-Rampa</title>
+  <title>Админ-панель | Armata-Rampa CMS</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  <style>
+    .modal { display: none; }
+    .modal.active { display: flex; }
+    .tab-btn.active { background: #3b82f6; color: white; }
+    .image-preview { width: 100px; height: 100px; object-fit: cover; border-radius: 8px; }
+  </style>
 </head>
-<body class="bg-neutral-100 font-sans">
+<body class="bg-neutral-50 font-sans">
   <script>
     if (!localStorage.getItem('adminToken')) {
       window.location.href = '/admin/login';
     }
+    const categories = ${categoriesJson};
   </script>
   
   <div class="min-h-screen flex">
-    <aside class="w-64 bg-white border-r border-neutral-200 flex flex-col">
+    <!-- Sidebar -->
+    <aside class="w-64 bg-white border-r border-neutral-200 flex flex-col fixed h-full">
       <div class="p-6 border-b border-neutral-100">
         <h1 class="text-xl font-bold text-neutral-800">Armata-Rampa</h1>
-        <p class="text-neutral-500 text-sm">Админ-панель</p>
+        <p class="text-neutral-500 text-sm">Система управления</p>
       </div>
-      <nav class="p-4 space-y-1 flex-1">
-        <a href="#dashboard" onclick="showSection('dashboard')" class="flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-600 font-medium">
+      <nav class="p-4 space-y-1 flex-1 overflow-y-auto">
+        <a href="#dashboard" onclick="showSection('dashboard')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-600 font-medium">
           <i class="fas fa-chart-pie w-5"></i> Дашборд
         </a>
-        <a href="#products" onclick="showSection('products')" class="flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
+        <a href="#products" onclick="showSection('products')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
           <i class="fas fa-boxes w-5"></i> Товары
         </a>
-        <a href="#leads" onclick="showSection('leads')" class="flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
+        <a href="#categories" onclick="showSection('categories')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
+          <i class="fas fa-folder w-5"></i> Категории
+        </a>
+        <a href="#leads" onclick="showSection('leads')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
           <i class="fas fa-envelope w-5"></i> Заявки
         </a>
-        <a href="#settings" onclick="showSection('settings')" class="flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
-          <i class="fas fa-cog w-5"></i> Настройки
+        <a href="#settings" onclick="showSection('settings')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
+          <i class="fas fa-cog w-5"></i> Настройки сайта
         </a>
       </nav>
       <div class="p-4 border-t border-neutral-100">
+        <div class="text-sm text-neutral-500 mb-2">Вошли как: <strong id="admin-name">Администратор</strong></div>
         <button onclick="logout()" class="w-full px-4 py-2 rounded-xl border border-neutral-200 text-neutral-600 hover:bg-neutral-50 transition-colors text-sm">
           <i class="fas fa-sign-out-alt mr-2"></i> Выйти
         </button>
       </div>
     </aside>
 
-    <main class="flex-1 p-8">
+    <!-- Main Content -->
+    <main class="flex-1 ml-64 p-8">
+      <!-- Dashboard -->
       <section id="section-dashboard" class="admin-section">
         <h2 class="text-2xl font-bold text-neutral-800 mb-6">Дашборд</h2>
-        <div class="grid grid-cols-4 gap-6 mb-8">
-          <div class="p-6 bg-white rounded-2xl shadow-sm">
-            <p class="text-neutral-500 text-sm mb-1">Товаров</p>
-            <p id="stat-products" class="text-3xl font-bold text-blue-600">0</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <div class="p-6 bg-white rounded-2xl shadow-sm border border-neutral-100">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-neutral-500 text-sm mb-1">Товаров</p>
+                <p id="stat-products" class="text-3xl font-bold text-blue-600">0</p>
+              </div>
+              <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                <i class="fas fa-boxes text-blue-600"></i>
+              </div>
+            </div>
           </div>
-          <div class="p-6 bg-white rounded-2xl shadow-sm">
-            <p class="text-neutral-500 text-sm mb-1">Заявок</p>
-            <p id="stat-leads" class="text-3xl font-bold text-green-600">0</p>
+          <div class="p-6 bg-white rounded-2xl shadow-sm border border-neutral-100">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-neutral-500 text-sm mb-1">Всего заявок</p>
+                <p id="stat-leads" class="text-3xl font-bold text-green-600">0</p>
+              </div>
+              <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
+                <i class="fas fa-envelope text-green-600"></i>
+              </div>
+            </div>
           </div>
-          <div class="p-6 bg-white rounded-2xl shadow-sm">
-            <p class="text-neutral-500 text-sm mb-1">Новых заявок</p>
-            <p id="stat-new-leads" class="text-3xl font-bold text-orange-500">0</p>
+          <div class="p-6 bg-white rounded-2xl shadow-sm border border-neutral-100">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-neutral-500 text-sm mb-1">Новых заявок</p>
+                <p id="stat-new-leads" class="text-3xl font-bold text-orange-500">0</p>
+              </div>
+              <div class="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center">
+                <i class="fas fa-bell text-orange-500"></i>
+              </div>
+            </div>
           </div>
-          <div class="p-6 bg-white rounded-2xl shadow-sm">
-            <p class="text-neutral-500 text-sm mb-1">Просмотров</p>
-            <p id="stat-views" class="text-3xl font-bold text-purple-600">0</p>
+          <div class="p-6 bg-white rounded-2xl shadow-sm border border-neutral-100">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-neutral-500 text-sm mb-1">Просмотров</p>
+                <p id="stat-views" class="text-3xl font-bold text-purple-600">0</p>
+              </div>
+              <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
+                <i class="fas fa-eye text-purple-600"></i>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="bg-white rounded-2xl p-6 shadow-sm">
+        <div class="bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
           <h3 class="font-semibold text-neutral-800 mb-4">Последние заявки</h3>
           <div id="recent-leads" class="space-y-3"></div>
         </div>
       </section>
 
+      <!-- Products Section -->
       <section id="section-products" class="admin-section hidden">
         <div class="flex justify-between items-center mb-6">
-          <h2 class="text-2xl font-bold text-neutral-800">Товары</h2>
+          <h2 class="text-2xl font-bold text-neutral-800">Управление товарами</h2>
+          <button onclick="openProductModal()" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors flex items-center gap-2">
+            <i class="fas fa-plus"></i> Добавить товар
+          </button>
         </div>
-        <div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div class="bg-white rounded-2xl shadow-sm border border-neutral-100 overflow-hidden">
           <table class="w-full">
-            <thead class="bg-neutral-50">
+            <thead class="bg-neutral-50 border-b border-neutral-100">
               <tr>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Фото</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Товар</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Категория</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Цена</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Статус</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Действия</th>
               </tr>
             </thead>
             <tbody id="products-table" class="divide-y divide-neutral-100"></tbody>
@@ -1407,15 +1515,42 @@ app.get('/admin', async (c) => {
         </div>
       </section>
 
+      <!-- Categories Section -->
+      <section id="section-categories" class="admin-section hidden">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold text-neutral-800">Категории</h2>
+          <button onclick="openCategoryModal()" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors flex items-center gap-2">
+            <i class="fas fa-plus"></i> Добавить категорию
+          </button>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-neutral-100 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-neutral-50 border-b border-neutral-100">
+              <tr>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Название</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Slug</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Порядок</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Статус</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="categories-table" class="divide-y divide-neutral-100"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Leads Section -->
       <section id="section-leads" class="admin-section hidden">
         <h2 class="text-2xl font-bold text-neutral-800 mb-6">Заявки</h2>
-        <div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div class="bg-white rounded-2xl shadow-sm border border-neutral-100 overflow-hidden">
           <table class="w-full">
-            <thead class="bg-neutral-50">
+            <thead class="bg-neutral-50 border-b border-neutral-100">
               <tr>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Дата</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Имя</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Телефон</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Email</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Сообщение</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Статус</th>
                 <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Действия</th>
               </tr>
@@ -1425,32 +1560,407 @@ app.get('/admin', async (c) => {
         </div>
       </section>
 
+      <!-- Settings Section -->
       <section id="section-settings" class="admin-section hidden">
-        <h2 class="text-2xl font-bold text-neutral-800 mb-6">Настройки</h2>
-        <div class="max-w-xl bg-white rounded-2xl p-6 shadow-sm">
-          <form id="settings-form" class="space-y-4">
-            <div>
-              <label class="block text-sm text-neutral-600 mb-2">Телефон</label>
-              <input type="text" name="phone_main" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500">
-            </div>
-            <div>
-              <label class="block text-sm text-neutral-600 mb-2">Email</label>
-              <input type="email" name="email" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500">
-            </div>
-            <div>
-              <label class="block text-sm text-neutral-600 mb-2">Адрес</label>
-              <input type="text" name="address" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500">
-            </div>
-            <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors">
-              Сохранить
-            </button>
-          </form>
+        <h2 class="text-2xl font-bold text-neutral-800 mb-6">Настройки сайта</h2>
+        
+        <!-- Settings Tabs -->
+        <div class="flex gap-2 mb-6">
+          <button onclick="showSettingsTab('general')" class="tab-btn active px-4 py-2 rounded-lg text-sm font-medium transition-colors">Основные</button>
+          <button onclick="showSettingsTab('contacts')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Контакты</button>
+          <button onclick="showSettingsTab('hero')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Главная секция</button>
+          <button onclick="showSettingsTab('about')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">О компании</button>
+          <button onclick="showSettingsTab('delivery')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Доставка</button>
+          <button onclick="showSettingsTab('seo')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">SEO</button>
+          <button onclick="showSettingsTab('email')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Email-уведомления</button>
         </div>
+
+        <form id="settings-form" class="space-y-6">
+          <!-- General Settings -->
+          <div id="settings-general" class="settings-tab bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Основные настройки</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Название сайта</label>
+                <input type="text" name="site_name" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Слоган</label>
+                <input type="text" name="site_tagline" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">URL логотипа</label>
+                <input type="text" name="logo_url" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://...">
+                <p class="text-xs text-neutral-500 mt-1">Вставьте URL изображения логотипа</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Favicon URL</label>
+                <input type="text" name="favicon_url" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://...">
+              </div>
+            </div>
+          </div>
+
+          <!-- Contact Settings -->
+          <div id="settings-contacts" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Контактная информация</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Основной телефон</label>
+                <input type="text" name="phone_main" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="+7 (495) 555-35-35">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">WhatsApp</label>
+                <input type="text" name="phone_whatsapp" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="+79001234567">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Email для связи</label>
+                <input type="email" name="email" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="info@company.ru">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Telegram</label>
+                <input type="text" name="telegram" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="@username">
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Адрес</label>
+                <input type="text" name="address" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="г. Владимир, ул. Промышленная, д. 10">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Время работы</label>
+                <input type="text" name="working_hours" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Пн-Пт: 9:00-18:00">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Карта (iframe или URL)</label>
+                <input type="text" name="map_embed" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://yandex.ru/map-widget/...">
+              </div>
+            </div>
+          </div>
+
+          <!-- Hero Section Settings -->
+          <div id="settings-hero" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Главная секция (Hero)</h3>
+            <div class="space-y-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Заголовок</label>
+                <input type="text" name="hero_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Погрузочные рампы и эстакады">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Подзаголовок (выделенный текст)</label>
+                <input type="text" name="hero_subtitle" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="от производителя">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Описание</label>
+                <textarea name="hero_description" rows="3" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Собственное производство во Владимире..."></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Фоновое изображение (URL)</label>
+                <input type="text" name="hero_bg_image" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://...">
+              </div>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Статистика 1 (число)</label>
+                  <input type="text" name="hero_stat1_value" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="500+">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Статистика 1 (текст)</label>
+                  <input type="text" name="hero_stat1_label" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="Проектов">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Статистика 2 (число)</label>
+                  <input type="text" name="hero_stat2_value" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="12 лет">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Статистика 2 (текст)</label>
+                  <input type="text" name="hero_stat2_label" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="На рынке">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- About Section Settings -->
+          <div id="settings-about" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Страница О компании</h3>
+            <div class="space-y-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Заголовок страницы</label>
+                <input type="text" name="about_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="О компании Armata-Rampa">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Основной текст</label>
+                <textarea name="about_content" rows="6" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Описание компании..."></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Изображение компании (URL)</label>
+                <input type="text" name="about_image" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://...">
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Срок гарантии</label>
+                  <input type="text" name="guarantee_years" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="1 год">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Опыт работы</label>
+                  <input type="text" name="experience_years" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="12 лет">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Delivery Settings -->
+          <div id="settings-delivery" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Страница Доставка и оплата</h3>
+            <div class="space-y-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Заголовок страницы</label>
+                <input type="text" name="delivery_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Доставка и оплата">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Информация о доставке</label>
+                <textarea name="delivery_content" rows="5" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Доставка осуществляется..."></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Информация об оплате</label>
+                <textarea name="payment_content" rows="5" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Способы оплаты..."></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Регионы доставки</label>
+                <textarea name="delivery_regions" rows="3" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Владимир, Москва, Нижний Новгород..."></textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- SEO Settings -->
+          <div id="settings-seo" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">SEO и аналитика</h3>
+            <div class="space-y-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Meta Title (главная)</label>
+                <input type="text" name="seo_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Погрузочные рампы и эстакады от производителя | Armata-Rampa">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Meta Description (главная)</label>
+                <textarea name="seo_description" rows="3" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Производитель погрузочных рамп..."></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Meta Keywords</label>
+                <input type="text" name="seo_keywords" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="рампы, эстакады, погрузочное оборудование">
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Яндекс.Метрика ID</label>
+                  <input type="text" name="yandex_metrika_id" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="12345678">
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-neutral-700 mb-2">Google Analytics ID</label>
+                  <input type="text" name="google_analytics_id" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="G-XXXXXXXXXX">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Email Notifications Settings -->
+          <div id="settings-email" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Email-уведомления о заявках</h3>
+            <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+              <p class="text-sm text-blue-800"><i class="fas fa-info-circle mr-2"></i>При поступлении новой заявки уведомление будет отправлено на указанный email.</p>
+            </div>
+            <div class="space-y-6">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Email для получения заявок</label>
+                <input type="email" name="admin_email" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="admin@company.ru">
+                <p class="text-xs text-neutral-500 mt-1">На этот адрес будут приходить уведомления о новых заявках</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Копия на дополнительный email</label>
+                <input type="email" name="admin_email_cc" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="manager@company.ru">
+                <p class="text-xs text-neutral-500 mt-1">Дополнительный получатель (необязательно)</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Тема письма</label>
+                <input type="text" name="email_subject_template" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Новая заявка с сайта Armata-Rampa">
+              </div>
+            </div>
+          </div>
+
+          <div class="flex gap-4">
+            <button type="submit" class="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors flex items-center gap-2">
+              <i class="fas fa-save"></i> Сохранить все настройки
+            </button>
+          </div>
+        </form>
       </section>
     </main>
   </div>
 
+  <!-- Product Modal -->
+  <div id="productModal" class="modal fixed inset-0 bg-black/50 z-50 items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+      <div class="p-6 border-b border-neutral-100 flex justify-between items-center sticky top-0 bg-white">
+        <h3 id="productModalTitle" class="text-xl font-bold text-neutral-800">Добавить товар</h3>
+        <button onclick="closeProductModal()" class="w-10 h-10 rounded-xl hover:bg-neutral-100 transition-colors">
+          <i class="fas fa-times text-neutral-500"></i>
+        </button>
+      </div>
+      <form id="productForm" class="p-6 space-y-6">
+        <input type="hidden" name="id" id="productId">
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label class="block text-sm font-medium text-neutral-700 mb-2">Название товара *</label>
+            <input type="text" name="name" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-neutral-700 mb-2">Slug (URL) *</label>
+            <input type="text" name="slug" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="rampa-t-9-7">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label class="block text-sm font-medium text-neutral-700 mb-2">Категория *</label>
+            <select name="category_id" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" id="productCategorySelect">
+              <option value="">Выберите категорию</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-neutral-700 mb-2">Цена (₽) *</label>
+            <input type="number" name="price" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="449000">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <label class="block text-sm font-medium text-neutral-700 mb-2">Старая цена (для скидки)</label>
+            <input type="number" name="old_price" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="499000">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-neutral-700 mb-2">Порядок сортировки</label>
+            <input type="number" name="sort_order" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="0">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Краткое описание</label>
+          <textarea name="short_description" rows="2" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Краткое описание для карточки"></textarea>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Полное описание</label>
+          <textarea name="full_description" rows="4" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Подробное описание товара"></textarea>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Главное изображение (URL)</label>
+          <input type="text" name="main_image" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://images.unsplash.com/...">
+          <p class="text-xs text-neutral-500 mt-1">Вставьте URL изображения или загрузите на хостинг изображений</p>
+          <div id="mainImagePreview" class="mt-2 hidden">
+            <img src="" alt="Preview" class="image-preview">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Дополнительные изображения (URL, по одному на строку)</label>
+          <textarea name="images" rows="3" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"></textarea>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Характеристики (JSON)</label>
+          <textarea name="specifications" rows="4" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 font-mono text-sm" placeholder='{"Грузоподъемность": "7 тонн", "Длина": "9 м"}'></textarea>
+          <p class="text-xs text-neutral-500 mt-1">Формат JSON: {"Параметр": "Значение"}</p>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <label class="flex items-center gap-3 p-4 bg-neutral-50 rounded-xl cursor-pointer">
+            <input type="checkbox" name="in_stock" class="w-5 h-5 rounded border-neutral-300 text-blue-600 focus:ring-blue-500">
+            <span class="text-sm font-medium text-neutral-700">В наличии</span>
+          </label>
+          <label class="flex items-center gap-3 p-4 bg-neutral-50 rounded-xl cursor-pointer">
+            <input type="checkbox" name="is_hit" class="w-5 h-5 rounded border-neutral-300 text-blue-600 focus:ring-blue-500">
+            <span class="text-sm font-medium text-neutral-700">Хит</span>
+          </label>
+          <label class="flex items-center gap-3 p-4 bg-neutral-50 rounded-xl cursor-pointer">
+            <input type="checkbox" name="is_new" class="w-5 h-5 rounded border-neutral-300 text-blue-600 focus:ring-blue-500">
+            <span class="text-sm font-medium text-neutral-700">Новинка</span>
+          </label>
+          <label class="flex items-center gap-3 p-4 bg-neutral-50 rounded-xl cursor-pointer">
+            <input type="checkbox" name="is_active" class="w-5 h-5 rounded border-neutral-300 text-blue-600 focus:ring-blue-500" checked>
+            <span class="text-sm font-medium text-neutral-700">Активен</span>
+          </label>
+        </div>
+
+        <div class="border-t border-neutral-100 pt-6">
+          <h4 class="text-sm font-semibold text-neutral-700 mb-4">SEO настройки</h4>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-neutral-700 mb-2">SEO Title</label>
+              <input type="text" name="seo_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-neutral-700 mb-2">SEO Description</label>
+              <textarea name="seo_description" rows="2" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"></textarea>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-neutral-700 mb-2">SEO Keywords</label>
+              <input type="text" name="seo_keywords" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-4 pt-4">
+          <button type="submit" class="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors">
+            <i class="fas fa-save mr-2"></i> Сохранить товар
+          </button>
+          <button type="button" onclick="closeProductModal()" class="px-6 py-3 border border-neutral-200 text-neutral-600 font-medium rounded-xl hover:bg-neutral-50 transition-colors">
+            Отмена
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Category Modal -->
+  <div id="categoryModal" class="modal fixed inset-0 bg-black/50 z-50 items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full">
+      <div class="p-6 border-b border-neutral-100 flex justify-between items-center">
+        <h3 id="categoryModalTitle" class="text-xl font-bold text-neutral-800">Добавить категорию</h3>
+        <button onclick="closeCategoryModal()" class="w-10 h-10 rounded-xl hover:bg-neutral-100 transition-colors">
+          <i class="fas fa-times text-neutral-500"></i>
+        </button>
+      </div>
+      <form id="categoryForm" class="p-6 space-y-4">
+        <input type="hidden" name="id" id="categoryId">
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Название *</label>
+          <input type="text" name="name" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Slug *</label>
+          <input type="text" name="slug" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Описание</label>
+          <textarea name="description" rows="3" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-neutral-700 mb-2">Порядок сортировки</label>
+          <input type="number" name="sort_order" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500" value="0">
+        </div>
+        <label class="flex items-center gap-3">
+          <input type="checkbox" name="is_active" class="w-5 h-5 rounded border-neutral-300 text-blue-600" checked>
+          <span class="text-sm font-medium text-neutral-700">Активна</span>
+        </label>
+        <div class="flex gap-4 pt-4">
+          <button type="submit" class="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl">Сохранить</button>
+          <button type="button" onclick="closeCategoryModal()" class="px-6 py-3 border border-neutral-200 text-neutral-600 rounded-xl hover:bg-neutral-50">Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script>
+    // Init admin name
+    const adminUser = JSON.parse(localStorage.getItem('adminUser') || '{}');
+    document.getElementById('admin-name').textContent = adminUser.username || 'Администратор';
+
     function logout() {
       localStorage.removeItem('adminToken');
       localStorage.removeItem('adminUser');
@@ -1461,14 +1971,29 @@ app.get('/admin', async (c) => {
       document.querySelectorAll('.admin-section').forEach(el => el.classList.add('hidden'));
       document.getElementById('section-' + section).classList.remove('hidden');
       
-      document.querySelectorAll('nav a').forEach(a => {
+      document.querySelectorAll('.nav-link').forEach(a => {
         a.classList.remove('bg-blue-50', 'text-blue-600', 'font-medium');
         a.classList.add('text-neutral-600');
       });
       event.target.closest('a').classList.add('bg-blue-50', 'text-blue-600', 'font-medium');
       event.target.closest('a').classList.remove('text-neutral-600');
+      
+      if (section === 'categories') loadCategories();
     }
 
+    function showSettingsTab(tab) {
+      document.querySelectorAll('.settings-tab').forEach(el => el.classList.add('hidden'));
+      document.getElementById('settings-' + tab).classList.remove('hidden');
+      
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active', 'bg-blue-600', 'text-white');
+        btn.classList.add('bg-neutral-100', 'text-neutral-600');
+      });
+      event.target.classList.add('active');
+      event.target.classList.remove('bg-neutral-100', 'text-neutral-600');
+    }
+
+    // Dashboard
     async function loadDashboard() {
       try {
         const [stats, leads] = await Promise.all([
@@ -1484,31 +2009,80 @@ app.get('/admin', async (c) => {
         }
         
         if (leads.success) {
-          document.getElementById('recent-leads').innerHTML = (leads.data || []).slice(0, 5).map(lead => 
-            '<div class="flex justify-between items-center p-4 bg-neutral-50 rounded-xl"><div><p class="font-medium text-neutral-800">' + lead.name + '</p><p class="text-sm text-neutral-500">' + lead.phone + '</p></div><span class="px-3 py-1 rounded-full text-xs font-medium ' + (lead.status === 'new' ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600') + '">' + (lead.status === 'new' ? 'Новая' : 'Обработана') + '</span></div>'
-          ).join('') || '<p class="text-neutral-500">Заявок пока нет</p>';
+          const recentLeads = (leads.data || []).slice(0, 5);
+          document.getElementById('recent-leads').innerHTML = recentLeads.length ? recentLeads.map(lead => 
+            '<div class="flex justify-between items-center p-4 bg-neutral-50 rounded-xl">' +
+              '<div><p class="font-medium text-neutral-800">' + lead.name + '</p>' +
+              '<p class="text-sm text-neutral-500">' + lead.phone + '</p></div>' +
+              '<span class="px-3 py-1 rounded-full text-xs font-medium ' + 
+              (lead.status === 'new' ? 'bg-orange-100 text-orange-600' : lead.status === 'processing' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600') + '">' + 
+              (lead.status === 'new' ? 'Новая' : lead.status === 'processing' ? 'В работе' : 'Завершена') + '</span></div>'
+          ).join('') : '<p class="text-neutral-500 text-center py-4">Заявок пока нет</p>';
         }
       } catch (e) {
-        console.error('Error:', e);
+        console.error('Error loading dashboard:', e);
       }
     }
 
+    // Products
     async function loadProducts() {
       const response = await fetch('/api/admin/products');
       const data = await response.json();
       
       document.getElementById('products-table').innerHTML = (data.data || []).map(product => 
-        '<tr><td class="px-6 py-4"><div class="font-medium text-neutral-800">' + product.name + '</div></td><td class="px-6 py-4 text-neutral-500">' + (product.category_name || '-') + '</td><td class="px-6 py-4 font-medium">' + (product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '-') + '</td><td class="px-6 py-4"><span class="px-3 py-1 rounded-full text-xs font-medium ' + (product.is_active ? 'bg-green-100 text-green-600' : 'bg-neutral-100 text-neutral-500') + '">' + (product.is_active ? 'Активен' : 'Скрыт') + '</span></td></tr>'
-      ).join('') || '<tr><td colspan="4" class="px-6 py-8 text-center text-neutral-500">Товаров нет</td></tr>';
+        '<tr class="hover:bg-neutral-50">' +
+          '<td class="px-6 py-4"><img src="' + (product.main_image || 'https://via.placeholder.com/60x60?text=No+image') + '" class="w-14 h-14 object-cover rounded-lg"></td>' +
+          '<td class="px-6 py-4"><div class="font-medium text-neutral-800">' + product.name + '</div><div class="text-sm text-neutral-500">' + product.slug + '</div></td>' +
+          '<td class="px-6 py-4 text-neutral-600">' + (product.category_name || '-') + '</td>' +
+          '<td class="px-6 py-4 font-semibold">' + (product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '-') + '</td>' +
+          '<td class="px-6 py-4"><span class="px-3 py-1 rounded-full text-xs font-medium ' + (product.is_active ? 'bg-green-100 text-green-600' : 'bg-neutral-100 text-neutral-500') + '">' + (product.is_active ? 'Активен' : 'Скрыт') + '</span></td>' +
+          '<td class="px-6 py-4"><div class="flex gap-2">' +
+            '<button onclick="editProduct(' + product.id + ')" class="w-9 h-9 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"><i class="fas fa-edit"></i></button>' +
+            '<button onclick="deleteProduct(' + product.id + ')" class="w-9 h-9 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"><i class="fas fa-trash"></i></button>' +
+          '</div></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="px-6 py-8 text-center text-neutral-500">Товаров нет</td></tr>';
     }
 
+    // Categories
+    async function loadCategories() {
+      const response = await fetch('/api/categories');
+      const data = await response.json();
+      
+      document.getElementById('categories-table').innerHTML = (data.data || []).map(cat => 
+        '<tr class="hover:bg-neutral-50">' +
+          '<td class="px-6 py-4 font-medium text-neutral-800">' + cat.name + '</td>' +
+          '<td class="px-6 py-4 text-neutral-500">' + cat.slug + '</td>' +
+          '<td class="px-6 py-4">' + (cat.sort_order || 0) + '</td>' +
+          '<td class="px-6 py-4"><span class="px-3 py-1 rounded-full text-xs font-medium ' + (cat.is_active ? 'bg-green-100 text-green-600' : 'bg-neutral-100 text-neutral-500') + '">' + (cat.is_active ? 'Активна' : 'Скрыта') + '</span></td>' +
+          '<td class="px-6 py-4"><div class="flex gap-2">' +
+            '<button onclick="editCategory(' + cat.id + ')" class="w-9 h-9 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"><i class="fas fa-edit"></i></button>' +
+            '<button onclick="deleteCategory(' + cat.id + ')" class="w-9 h-9 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"><i class="fas fa-trash"></i></button>' +
+          '</div></td></tr>'
+      ).join('') || '<tr><td colspan="5" class="px-6 py-8 text-center text-neutral-500">Категорий нет</td></tr>';
+    }
+
+    // Leads
     async function loadLeads() {
       const response = await fetch('/api/admin/leads');
       const data = await response.json();
       
       document.getElementById('leads-table').innerHTML = (data.data || []).map(lead => 
-        '<tr><td class="px-6 py-4 text-sm text-neutral-500">' + new Date(lead.created_at).toLocaleString('ru-RU') + '</td><td class="px-6 py-4 font-medium text-neutral-800">' + lead.name + '</td><td class="px-6 py-4">' + lead.phone + '</td><td class="px-6 py-4"><select onchange="updateLeadStatus(' + lead.id + ', this.value)" class="px-3 py-1 rounded-lg border border-neutral-200 text-sm"><option value="new"' + (lead.status === 'new' ? ' selected' : '') + '>Новая</option><option value="processing"' + (lead.status === 'processing' ? ' selected' : '') + '>В работе</option><option value="completed"' + (lead.status === 'completed' ? ' selected' : '') + '>Завершена</option></select></td><td class="px-6 py-4"><a href="tel:' + lead.phone + '" class="text-green-600 hover:text-green-700"><i class="fas fa-phone"></i></a></td></tr>'
-      ).join('') || '<tr><td colspan="5" class="px-6 py-8 text-center text-neutral-500">Заявок нет</td></tr>';
+        '<tr class="hover:bg-neutral-50">' +
+          '<td class="px-6 py-4 text-sm text-neutral-500">' + new Date(lead.created_at).toLocaleString('ru-RU') + '</td>' +
+          '<td class="px-6 py-4 font-medium text-neutral-800">' + lead.name + '</td>' +
+          '<td class="px-6 py-4"><a href="tel:' + lead.phone + '" class="text-blue-600 hover:underline">' + lead.phone + '</a></td>' +
+          '<td class="px-6 py-4">' + (lead.email || '-') + '</td>' +
+          '<td class="px-6 py-4 text-sm text-neutral-500 max-w-xs truncate">' + (lead.message || '-') + '</td>' +
+          '<td class="px-6 py-4"><select onchange="updateLeadStatus(' + lead.id + ', this.value)" class="px-3 py-2 rounded-lg border border-neutral-200 text-sm focus:border-blue-500">' +
+            '<option value="new"' + (lead.status === 'new' ? ' selected' : '') + '>Новая</option>' +
+            '<option value="processing"' + (lead.status === 'processing' ? ' selected' : '') + '>В работе</option>' +
+            '<option value="completed"' + (lead.status === 'completed' ? ' selected' : '') + '>Завершена</option>' +
+          '</select></td>' +
+          '<td class="px-6 py-4"><div class="flex gap-2">' +
+            '<a href="tel:' + lead.phone + '" class="w-9 h-9 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 flex items-center justify-center transition-colors"><i class="fas fa-phone"></i></a>' +
+            (lead.email ? '<a href="mailto:' + lead.email + '" class="w-9 h-9 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors"><i class="fas fa-envelope"></i></a>' : '') +
+          '</div></td></tr>'
+      ).join('') || '<tr><td colspan="7" class="px-6 py-8 text-center text-neutral-500">Заявок нет</td></tr>';
     }
 
     async function updateLeadStatus(id, status) {
@@ -1517,10 +2091,10 @@ app.get('/admin', async (c) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
-      loadLeads();
       loadDashboard();
     }
 
+    // Settings
     async function loadSettings() {
       const response = await fetch('/api/settings');
       const data = await response.json();
@@ -1529,24 +2103,246 @@ app.get('/admin', async (c) => {
       const form = document.getElementById('settings-form');
       Object.keys(settings).forEach(key => {
         const input = form.querySelector('[name="' + key + '"]');
-        if (input) input.value = settings[key];
+        if (input) {
+          if (input.type === 'checkbox') {
+            input.checked = settings[key] === '1' || settings[key] === 'true';
+          } else {
+            input.value = settings[key];
+          }
+        }
       });
     }
 
     document.getElementById('settings-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const formData = new FormData(e.target);
-      const settings = Object.fromEntries(formData);
+      const settings = {};
+      formData.forEach((value, key) => {
+        settings[key] = value;
+      });
       
-      await fetch('/api/admin/settings', {
+      const response = await fetch('/api/admin/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
       });
       
-      alert('Настройки сохранены');
+      if (response.ok) {
+        alert('Настройки успешно сохранены!');
+      } else {
+        alert('Ошибка сохранения настроек');
+      }
     });
 
+    // Product Modal
+    function openProductModal(product = null) {
+      const modal = document.getElementById('productModal');
+      const form = document.getElementById('productForm');
+      const title = document.getElementById('productModalTitle');
+      const select = document.getElementById('productCategorySelect');
+      
+      // Populate categories
+      select.innerHTML = '<option value="">Выберите категорию</option>' + 
+        categories.map(c => '<option value="' + c.id + '">' + c.name + '</option>').join('');
+      
+      form.reset();
+      document.getElementById('productId').value = '';
+      
+      if (product) {
+        title.textContent = 'Редактировать товар';
+        document.getElementById('productId').value = product.id;
+        form.name.value = product.name || '';
+        form.slug.value = product.slug || '';
+        form.category_id.value = product.category_id || '';
+        form.price.value = product.price || '';
+        form.old_price.value = product.old_price || '';
+        form.sort_order.value = product.sort_order || 0;
+        form.short_description.value = product.short_description || '';
+        form.full_description.value = product.full_description || '';
+        form.main_image.value = product.main_image || '';
+        form.images.value = (product.images ? (typeof product.images === 'string' ? JSON.parse(product.images) : product.images) : []).join('\\n');
+        form.specifications.value = product.specifications ? (typeof product.specifications === 'string' ? product.specifications : JSON.stringify(product.specifications, null, 2)) : '';
+        form.in_stock.checked = !!product.in_stock;
+        form.is_hit.checked = !!product.is_hit;
+        form.is_new.checked = !!product.is_new;
+        form.is_active.checked = !!product.is_active;
+        form.seo_title.value = product.seo_title || '';
+        form.seo_description.value = product.seo_description || '';
+        form.seo_keywords.value = product.seo_keywords || '';
+      } else {
+        title.textContent = 'Добавить товар';
+        form.is_active.checked = true;
+        form.in_stock.checked = true;
+      }
+      
+      modal.classList.add('active');
+    }
+
+    function closeProductModal() {
+      document.getElementById('productModal').classList.remove('active');
+    }
+
+    async function editProduct(id) {
+      const response = await fetch('/api/admin/products');
+      const data = await response.json();
+      const product = data.data.find(p => p.id === id);
+      if (product) openProductModal(product);
+    }
+
+    async function deleteProduct(id) {
+      if (!confirm('Удалить этот товар?')) return;
+      await fetch('/api/admin/products/' + id, { method: 'DELETE' });
+      loadProducts();
+      loadDashboard();
+    }
+
+    document.getElementById('productForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const id = document.getElementById('productId').value;
+      
+      let images = [];
+      try {
+        images = form.images.value.split('\\n').filter(url => url.trim());
+      } catch (e) {}
+      
+      let specifications = {};
+      try {
+        specifications = form.specifications.value ? JSON.parse(form.specifications.value) : {};
+      } catch (e) {
+        alert('Неверный формат характеристик (JSON)');
+        return;
+      }
+      
+      const data = {
+        name: form.name.value,
+        slug: form.slug.value,
+        category_id: parseInt(form.category_id.value),
+        price: parseInt(form.price.value),
+        old_price: form.old_price.value ? parseInt(form.old_price.value) : null,
+        sort_order: parseInt(form.sort_order.value) || 0,
+        short_description: form.short_description.value,
+        full_description: form.full_description.value,
+        main_image: form.main_image.value,
+        images: images,
+        specifications: specifications,
+        in_stock: form.in_stock.checked,
+        is_hit: form.is_hit.checked,
+        is_new: form.is_new.checked,
+        is_active: form.is_active.checked,
+        seo_title: form.seo_title.value,
+        seo_description: form.seo_description.value,
+        seo_keywords: form.seo_keywords.value
+      };
+      
+      const url = id ? '/api/admin/products/' + id : '/api/admin/products';
+      const method = id ? 'PUT' : 'POST';
+      
+      const response = await fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      
+      if (response.ok) {
+        closeProductModal();
+        loadProducts();
+        loadDashboard();
+        alert(id ? 'Товар обновлен!' : 'Товар добавлен!');
+      } else {
+        const err = await response.json();
+        alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+      }
+    });
+
+    // Image preview
+    document.querySelector('[name="main_image"]').addEventListener('input', function() {
+      const preview = document.getElementById('mainImagePreview');
+      if (this.value) {
+        preview.querySelector('img').src = this.value;
+        preview.classList.remove('hidden');
+      } else {
+        preview.classList.add('hidden');
+      }
+    });
+
+    // Category Modal
+    function openCategoryModal(category = null) {
+      const modal = document.getElementById('categoryModal');
+      const form = document.getElementById('categoryForm');
+      const title = document.getElementById('categoryModalTitle');
+      
+      form.reset();
+      document.getElementById('categoryId').value = '';
+      
+      if (category) {
+        title.textContent = 'Редактировать категорию';
+        document.getElementById('categoryId').value = category.id;
+        form.name.value = category.name || '';
+        form.slug.value = category.slug || '';
+        form.description.value = category.description || '';
+        form.sort_order.value = category.sort_order || 0;
+        form.is_active.checked = !!category.is_active;
+      } else {
+        title.textContent = 'Добавить категорию';
+        form.is_active.checked = true;
+      }
+      
+      modal.classList.add('active');
+    }
+
+    function closeCategoryModal() {
+      document.getElementById('categoryModal').classList.remove('active');
+    }
+
+    async function editCategory(id) {
+      const response = await fetch('/api/categories');
+      const data = await response.json();
+      const category = data.data.find(c => c.id === id);
+      if (category) openCategoryModal(category);
+    }
+
+    async function deleteCategory(id) {
+      if (!confirm('Удалить эту категорию?')) return;
+      await fetch('/api/admin/categories/' + id, { method: 'DELETE' });
+      loadCategories();
+    }
+
+    document.getElementById('categoryForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const id = document.getElementById('categoryId').value;
+      
+      const data = {
+        name: form.name.value,
+        slug: form.slug.value,
+        description: form.description.value,
+        sort_order: parseInt(form.sort_order.value) || 0,
+        is_active: form.is_active.checked
+      };
+      
+      const url = id ? '/api/admin/categories/' + id : '/api/admin/categories';
+      const method = id ? 'PUT' : 'POST';
+      
+      const response = await fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      
+      if (response.ok) {
+        closeCategoryModal();
+        loadCategories();
+        alert(id ? 'Категория обновлена!' : 'Категория добавлена!');
+        // Reload page to update categories in product form
+        location.reload();
+      } else {
+        const err = await response.json();
+        alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+      }
+    });
+
+    // Init
     loadDashboard();
     loadProducts();
     loadLeads();
