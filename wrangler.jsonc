@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "armata-rampa",
+  "compatibility_date": "2026-01-21",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": ["nodejs_compat"],
+  
+  // D1 Database для CMS
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "armata_db",
+      "database_id": "local-dev-db"
+    }
+  ]
+}

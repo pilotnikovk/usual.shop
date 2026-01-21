@@ -1,0 +1,22 @@
+User-agent: *
+Allow: /
+
+# Disallow admin area
+Disallow: /admin
+Disallow: /api/admin/
+
+# Sitemap
+Sitemap: https://armata-rampa.ru/sitemap.xml
+
+# Crawl delay
+Crawl-delay: 1
+
+# Specific bots
+User-agent: Googlebot
+Allow: /
+
+User-agent: Yandex
+Allow: /
+
+User-agent: Bingbot
+Allow: /
