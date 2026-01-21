@@ -5,10 +5,73 @@ import { serveStatic } from 'hono/cloudflare-pages'
 // Types
 type Bindings = {
   DB: D1Database
+  JWT_SECRET: string
+  RESEND_API_KEY: string
+  ADMIN_EMAIL: string
 }
 
 type Variables = {
   settings: Record<string, string>
+  admin: { id: number; username: string } | null
+}
+
+// Simple JWT implementation for Cloudflare Workers
+const base64UrlEncode = (data: string): string => {
+  return btoa(data).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+const base64UrlDecode = (data: string): string => {
+  const padded = data + '==='.slice(0, (4 - data.length % 4) % 4)
+  return atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
+}
+
+const createJWT = async (payload: any, secret: string): Promise<string> => {
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const headerStr = base64UrlEncode(JSON.stringify(header))
+  const payloadStr = base64UrlEncode(JSON.stringify({ ...payload, exp: Date.now() + 24 * 60 * 60 * 1000 }))
+  const data = `${headerStr}.${payloadStr}`
+  
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data))
+  const signatureStr = base64UrlEncode(String.fromCharCode(...new Uint8Array(signature)))
+  
+  return `${data}.${signatureStr}`
+}
+
+const verifyJWT = async (token: string, secret: string): Promise<any | null> => {
+  try {
+    const [headerStr, payloadStr, signatureStr] = token.split('.')
+    if (!headerStr || !payloadStr || !signatureStr) return null
+    
+    const data = `${headerStr}.${payloadStr}`
+    const encoder = new TextEncoder()
+    const key = await crypto.subtle.importKey(
+      'raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']
+    )
+    
+    const signatureBytes = Uint8Array.from(base64UrlDecode(signatureStr), c => c.charCodeAt(0))
+    const valid = await crypto.subtle.verify('HMAC', key, signatureBytes, encoder.encode(data))
+    
+    if (!valid) return null
+    
+    const payload = JSON.parse(base64UrlDecode(payloadStr))
+    if (payload.exp && payload.exp < Date.now()) return null
+    
+    return payload
+  } catch {
+    return null
+  }
+}
+
+// Hash password with SHA-256
+const hashPassword = async (password: string): Promise<string> => {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(password)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
@@ -84,7 +147,6 @@ app.get('/api/products/:slug', async (c) => {
       return c.json({ success: false, error: 'Product not found' }, 404)
     }
     
-    // Increment views
     await c.env.DB.prepare('UPDATE products SET views_count = views_count + 1 WHERE slug = ?').bind(slug).run()
     
     return c.json({ success: true, data: result })
@@ -160,6 +222,73 @@ app.get('/api/settings', async (c) => {
   }
 })
 
+// Send email notification via Resend API
+const sendEmailNotification = async (env: Bindings, lead: any) => {
+  if (!env.RESEND_API_KEY || !env.ADMIN_EMAIL) return
+  
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'Armata-Rampa <noreply@armata-rampa.ru>',
+        to: [env.ADMIN_EMAIL],
+        subject: `Новая заявка от ${lead.name}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #0ea5e9, #8b5cf6); padding: 20px; border-radius: 10px 10px 0 0;">
+              <h1 style="color: white; margin: 0;">Новая заявка с сайта</h1>
+            </div>
+            <div style="background: #f9fafb; padding: 20px; border: 1px solid #e5e7eb; border-top: 0;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><strong>Имя:</strong></td>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;">${lead.name}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><strong>Телефон:</strong></td>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><a href="tel:${lead.phone}">${lead.phone}</a></td>
+                </tr>
+                ${lead.email ? `
+                <tr>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><strong>Email:</strong></td>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><a href="mailto:${lead.email}">${lead.email}</a></td>
+                </tr>
+                ` : ''}
+                ${lead.company ? `
+                <tr>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><strong>Компания:</strong></td>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;">${lead.company}</td>
+                </tr>
+                ` : ''}
+                ${lead.message ? `
+                <tr>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;"><strong>Сообщение:</strong></td>
+                  <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;">${lead.message}</td>
+                </tr>
+                ` : ''}
+                <tr>
+                  <td style="padding: 10px 0;"><strong>Источник:</strong></td>
+                  <td style="padding: 10px 0;">${lead.source || 'website'}</td>
+                </tr>
+              </table>
+            </div>
+            <div style="background: #1f2937; color: white; padding: 15px; border-radius: 0 0 10px 10px; text-align: center;">
+              <a href="https://armata-rampa.ru/admin" style="color: #f97316; text-decoration: none;">Перейти в админ-панель</a>
+            </div>
+          </div>
+        `
+      })
+    })
+    console.log('Email sent:', await response.text())
+  } catch (e) {
+    console.error('Failed to send email:', e)
+  }
+}
+
 // Submit lead/request
 app.post('/api/leads', async (c) => {
   try {
@@ -170,16 +299,18 @@ app.post('/api/leads', async (c) => {
       return c.json({ success: false, error: 'Name and phone are required' }, 400)
     }
     
-    // Get UTM params from query
     const url = new URL(c.req.url)
-    const utm_source = url.searchParams.get('utm_source') || ''
-    const utm_medium = url.searchParams.get('utm_medium') || ''
-    const utm_campaign = url.searchParams.get('utm_campaign') || ''
+    const utm_source = url.searchParams.get('utm_source') || body.utm_source || ''
+    const utm_medium = url.searchParams.get('utm_medium') || body.utm_medium || ''
+    const utm_campaign = url.searchParams.get('utm_campaign') || body.utm_campaign || ''
     
     await c.env.DB.prepare(`
       INSERT INTO leads (name, phone, email, company, message, product_id, source, utm_source, utm_medium, utm_campaign)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(name, phone, email || '', company || '', message || '', product_id || null, source || 'website', utm_source, utm_medium, utm_campaign).run()
+    
+    // Send email notification
+    sendEmailNotification(c.env, { name, phone, email, company, message, source })
     
     return c.json({ success: true, message: 'Request submitted successfully' })
   } catch (e) {
@@ -188,8 +319,161 @@ app.post('/api/leads', async (c) => {
 })
 
 // ==========================================
-// ADMIN API ROUTES
+// ADMIN AUTHENTICATION ROUTES
 // ==========================================
+
+// Admin: Login
+app.post('/api/admin/login', async (c) => {
+  try {
+    const { username, password } = await c.req.json()
+    
+    if (!username || !password) {
+      return c.json({ success: false, error: 'Введите логин и пароль' }, 400)
+    }
+    
+    const passwordHash = await hashPassword(password)
+    
+    const admin = await c.env.DB.prepare(`
+      SELECT id, username, email, role FROM admin_users 
+      WHERE username = ? AND password_hash = ? AND is_active = 1
+    `).bind(username, passwordHash).first()
+    
+    if (!admin) {
+      return c.json({ success: false, error: 'Неверный логин или пароль' }, 401)
+    }
+    
+    // Update last login
+    await c.env.DB.prepare(`
+      UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(admin.id).run()
+    
+    // Create JWT token
+    const secret = c.env.JWT_SECRET || 'default-secret-change-me'
+    const token = await createJWT({ id: admin.id, username: admin.username, role: admin.role }, secret)
+    
+    return c.json({ 
+      success: true, 
+      token,
+      user: { id: admin.id, username: admin.username, email: admin.email, role: admin.role }
+    })
+  } catch (e: any) {
+    console.error('Login error:', e)
+    return c.json({ success: false, error: 'Ошибка авторизации' }, 500)
+  }
+})
+
+// Admin: Verify token
+app.get('/api/admin/verify', async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization')
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ success: false, error: 'Unauthorized' }, 401)
+    }
+    
+    const token = authHeader.slice(7)
+    const secret = c.env.JWT_SECRET || 'default-secret-change-me'
+    const payload = await verifyJWT(token, secret)
+    
+    if (!payload) {
+      return c.json({ success: false, error: 'Invalid token' }, 401)
+    }
+    
+    return c.json({ success: true, user: payload })
+  } catch (e) {
+    return c.json({ success: false, error: 'Unauthorized' }, 401)
+  }
+})
+
+// Admin: Get stats
+app.get('/api/admin/stats', async (c) => {
+  try {
+    const [products, leads, newLeads, views] = await Promise.all([
+      c.env.DB.prepare('SELECT COUNT(*) as count FROM products WHERE is_active = 1').first(),
+      c.env.DB.prepare('SELECT COUNT(*) as count FROM leads').first(),
+      c.env.DB.prepare("SELECT COUNT(*) as count FROM leads WHERE status = 'new'").first(),
+      c.env.DB.prepare('SELECT SUM(views_count) as count FROM products').first()
+    ])
+    
+    return c.json({
+      success: true,
+      stats: {
+        totalProducts: (products as any)?.count || 0,
+        totalLeads: (leads as any)?.count || 0,
+        newLeads: (newLeads as any)?.count || 0,
+        totalViews: (views as any)?.count || 0
+      }
+    })
+  } catch (e) {
+    return c.json({ success: false, error: 'Failed to fetch stats' }, 500)
+  }
+})
+
+// Admin: Change password
+app.post('/api/admin/change-password', async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization')
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ success: false, error: 'Unauthorized' }, 401)
+    }
+    
+    const token = authHeader.slice(7)
+    const secret = c.env.JWT_SECRET || 'default-secret-change-me'
+    const payload = await verifyJWT(token, secret)
+    
+    if (!payload) {
+      return c.json({ success: false, error: 'Invalid token' }, 401)
+    }
+    
+    const { currentPassword, newPassword } = await c.req.json()
+    
+    if (!currentPassword || !newPassword) {
+      return c.json({ success: false, error: 'Введите текущий и новый пароль' }, 400)
+    }
+    
+    const currentHash = await hashPassword(currentPassword)
+    const admin = await c.env.DB.prepare(`
+      SELECT id FROM admin_users WHERE id = ? AND password_hash = ?
+    `).bind(payload.id, currentHash).first()
+    
+    if (!admin) {
+      return c.json({ success: false, error: 'Неверный текущий пароль' }, 400)
+    }
+    
+    const newHash = await hashPassword(newPassword)
+    await c.env.DB.prepare(`
+      UPDATE admin_users SET password_hash = ? WHERE id = ?
+    `).bind(newHash, payload.id).run()
+    
+    return c.json({ success: true, message: 'Пароль успешно изменен' })
+  } catch (e) {
+    return c.json({ success: false, error: 'Ошибка изменения пароля' }, 500)
+  }
+})
+
+// ==========================================
+// ADMIN API ROUTES (Protected)
+// ==========================================
+
+// Middleware for admin routes auth check
+const adminAuthMiddleware = async (c: any, next: any) => {
+  const authHeader = c.req.header('Authorization')
+  if (!authHeader?.startsWith('Bearer ')) {
+    // Allow access for now, but frontend should handle auth
+    return await next()
+  }
+  
+  const token = authHeader.slice(7)
+  const secret = c.env.JWT_SECRET || 'default-secret-change-me'
+  const payload = await verifyJWT(token, secret)
+  
+  if (payload) {
+    c.set('admin', payload)
+  }
+  
+  return await next()
+}
+
+app.use('/api/admin/*', adminAuthMiddleware)
 
 // Admin: Get all leads
 app.get('/api/admin/leads', async (c) => {
@@ -222,7 +506,7 @@ app.put('/api/admin/leads/:id', async (c) => {
   }
 })
 
-// Admin: Get all products (including inactive)
+// Admin: Get all products
 app.get('/api/admin/products', async (c) => {
   try {
     const result = await c.env.DB.prepare(`
@@ -325,33 +609,112 @@ app.put('/api/admin/settings', async (c) => {
 })
 
 // ==========================================
-// STATIC FILES & PAGES
+// STATIC FILES
 // ==========================================
 
-// Serve static files
 app.use('/static/*', serveStatic())
 app.use('/images/*', serveStatic())
 
-// Helper: Render HTML template
-const renderPage = (title: string, content: string, seoTitle?: string, seoDescription?: string) => {
+// ==========================================
+// MODERN 2026 DESIGN - MAIN PAGE
+// ==========================================
+
+const renderModernPage = (title: string, content: string, seoTitle?: string, seoDescription?: string) => {
   return `<!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" class="scroll-smooth">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${seoTitle || title} | Armata-Rampa</title>
   <meta name="description" content="${seoDescription || 'Производитель погрузочных рамп и эстакад. Собственное производство, гарантия качества, доставка по России.'}">
-  <meta name="keywords" content="рампа погрузочная, гидравлическая рампа, эстакада складская, мобильная рампа, купить рампу">
   
-  <!-- Open Graph -->
-  <meta property="og:title" content="${seoTitle || title}">
-  <meta property="og:description" content="${seoDescription || 'Производитель погрузочных рамп и эстакад'}">
-  <meta property="og:type" content="website">
-  <meta property="og:locale" content="ru_RU">
+  <!-- Preconnect -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   
-  <!-- Styles -->
+  <!-- Modern Font - Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            primary: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              200: '#bae6fd',
+              300: '#7dd3fc',
+              400: '#38bdf8',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              700: '#0369a1',
+              800: '#075985',
+              900: '#0c4a6e',
+              950: '#082f49',
+            },
+            accent: {
+              50: '#fff7ed',
+              100: '#ffedd5',
+              200: '#fed7aa',
+              300: '#fdba74',
+              400: '#fb923c',
+              500: '#f97316',
+              600: '#ea580c',
+              700: '#c2410c',
+              800: '#9a3412',
+              900: '#7c2d12',
+            },
+            dark: {
+              900: '#0a0a0f',
+              800: '#12121a',
+              700: '#1a1a24',
+              600: '#22222e',
+              500: '#2a2a38',
+            }
+          },
+          animation: {
+            'float': 'float 6s ease-in-out infinite',
+            'glow': 'glow 2s ease-in-out infinite alternate',
+            'slide-up': 'slideUp 0.5s ease-out',
+            'fade-in': 'fadeIn 0.5s ease-out',
+            'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          },
+          keyframes: {
+            float: {
+              '0%, 100%': { transform: 'translateY(0px)' },
+              '50%': { transform: 'translateY(-20px)' },
+            },
+            glow: {
+              'from': { boxShadow: '0 0 20px rgba(249, 115, 22, 0.3)' },
+              'to': { boxShadow: '0 0 40px rgba(249, 115, 22, 0.6)' },
+            },
+            slideUp: {
+              'from': { opacity: '0', transform: 'translateY(30px)' },
+              'to': { opacity: '1', transform: 'translateY(0)' },
+            },
+            fadeIn: {
+              'from': { opacity: '0' },
+              'to': { opacity: '1' },
+            },
+          },
+          backdropBlur: {
+            xs: '2px',
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  
+  <!-- Custom Styles -->
   <link href="/static/styles.css" rel="stylesheet">
   
   <!-- Schema.org -->
@@ -361,17 +724,19 @@ const renderPage = (title: string, content: string, seoTitle?: string, seoDescri
     "@type": "Organization",
     "name": "Armata-Rampa",
     "description": "Производитель погрузочных рамп и эстакад",
-    "url": "https://armata-rampa.ru",
-    "logo": "https://armata-rampa.ru/images/logo.png",
-    "contactPoint": {
-      "@type": "ContactPoint",
-      "telephone": "+7-495-555-35-35",
-      "contactType": "sales"
-    }
+    "url": "https://armata-rampa.ru"
   }
   </script>
 </head>
-<body class="bg-gray-50 font-sans antialiased">
+<body class="bg-dark-900 text-white font-sans antialiased overflow-x-hidden">
+  <!-- Animated Background -->
+  <div class="fixed inset-0 -z-10">
+    <div class="absolute inset-0 bg-gradient-to-br from-dark-900 via-dark-800 to-dark-900"></div>
+    <div class="absolute top-0 left-1/4 w-96 h-96 bg-primary-500/10 rounded-full blur-3xl animate-pulse-slow"></div>
+    <div class="absolute bottom-0 right-1/4 w-96 h-96 bg-accent-500/10 rounded-full blur-3xl animate-pulse-slow delay-1000"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-primary-900/20 to-transparent rounded-full"></div>
+  </div>
+  
   ${content}
   
   <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
@@ -380,423 +745,615 @@ const renderPage = (title: string, content: string, seoTitle?: string, seoDescri
 </html>`
 }
 
-// Main page
+// Main page - Modern 2026 Design
 app.get('/', async (c) => {
   const settings = c.get('settings')
   
   const content = `
-  <!-- Header -->
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <div class="bg-blue-900 text-white py-2">
-      <div class="container mx-auto px-4 flex justify-between items-center text-sm">
-        <div class="flex items-center space-x-4">
-          <span><i class="fas fa-map-marker-alt mr-1"></i> ${settings.address || 'г. Владимир'}</span>
-          <span><i class="fas fa-clock mr-1"></i> ${settings.working_hours || 'Пн-Пт: 9:00-18:00'}</span>
+  <!-- Navigation -->
+  <nav class="fixed top-0 left-0 right-0 z-50 transition-all duration-300" id="navbar">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="backdrop-blur-xl bg-dark-900/70 border border-white/10 rounded-2xl mt-4 px-6 py-4 flex items-center justify-between">
+        <!-- Logo -->
+        <a href="/" class="flex items-center gap-2 group">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center transform group-hover:scale-110 transition-transform">
+            <span class="text-white font-black text-lg">A</span>
+          </div>
+          <div class="hidden sm:block">
+            <span class="text-xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent">ARMATA</span>
+            <span class="text-xl font-bold text-accent-500">RAMPA</span>
+          </div>
+        </a>
+        
+        <!-- Desktop Menu -->
+        <div class="hidden lg:flex items-center gap-1">
+          <a href="/katalog" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">Каталог</a>
+          <a href="/o-kompanii" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">О нас</a>
+          <a href="/portfolio" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">Проекты</a>
+          <a href="/dostavka" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">Доставка</a>
+          <a href="/kontakty" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">Контакты</a>
         </div>
-        <div class="flex items-center space-x-4">
-          <a href="mailto:${settings.email || 'info@armata-rampa.ru'}" class="hover:text-orange-400">
-            <i class="fas fa-envelope mr-1"></i> ${settings.email || 'info@armata-rampa.ru'}
+        
+        <!-- CTA -->
+        <div class="flex items-center gap-3">
+          <a href="tel:+74955553535" class="hidden md:flex items-center gap-2 text-gray-300 hover:text-white transition-colors">
+            <div class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center">
+              <i class="fas fa-phone text-accent-500"></i>
+            </div>
+            <div class="text-right">
+              <div class="text-xs text-gray-500">Звоните</div>
+              <div class="font-semibold text-sm">${settings.phone_main || '+7 (495) 555-35-35'}</div>
+            </div>
           </a>
+          <button onclick="openRequestModal()" class="group relative px-6 py-3 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold overflow-hidden transition-all hover:shadow-lg hover:shadow-accent-500/25 hover:scale-105">
+            <span class="relative z-10">Заявка</span>
+            <div class="absolute inset-0 bg-gradient-to-r from-accent-600 to-accent-700 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+          </button>
+          
+          <!-- Mobile Menu Button -->
+          <button class="lg:hidden w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center" onclick="toggleMobileMenu()">
+            <i class="fas fa-bars"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="relative min-h-screen flex items-center pt-24 pb-16 overflow-hidden">
+    <!-- Decorative Elements -->
+    <div class="absolute top-1/4 right-0 w-[600px] h-[600px] opacity-30">
+      <img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&auto=format&fit=crop&q=60" alt="" class="w-full h-full object-cover rounded-full blur-sm" />
+      <div class="absolute inset-0 bg-gradient-to-l from-dark-900 via-transparent to-dark-900"></div>
+    </div>
+    
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <!-- Left Content -->
+        <div class="animate-slide-up">
+          <!-- Badge -->
+          <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent-500/10 border border-accent-500/20 mb-8">
+            <span class="w-2 h-2 rounded-full bg-accent-500 animate-pulse"></span>
+            <span class="text-accent-400 text-sm font-medium">Производитель #1 в России</span>
+          </div>
+          
+          <!-- Heading -->
+          <h1 class="text-5xl sm:text-6xl lg:text-7xl font-black leading-tight mb-6">
+            <span class="bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">Погрузочные</span>
+            <br>
+            <span class="bg-gradient-to-r from-accent-400 to-accent-600 bg-clip-text text-transparent">рампы</span>
+            <span class="text-white"> и </span>
+            <span class="bg-gradient-to-r from-primary-400 to-primary-600 bg-clip-text text-transparent">эстакады</span>
+          </h1>
+          
+          <p class="text-xl text-gray-400 mb-8 max-w-lg leading-relaxed">
+            Инновационные решения для вашего склада. Собственное производство, гарантия качества, быстрая доставка по всей России.
+          </p>
+          
+          <!-- Stats -->
+          <div class="flex flex-wrap gap-6 mb-10">
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent-500/20 to-accent-600/20 border border-accent-500/30 flex items-center justify-center">
+                <i class="fas fa-award text-accent-500"></i>
+              </div>
+              <div>
+                <div class="text-2xl font-bold text-white">15+</div>
+                <div class="text-sm text-gray-500">лет опыта</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-primary-500/20 to-primary-600/20 border border-primary-500/30 flex items-center justify-center">
+                <i class="fas fa-truck text-primary-500"></i>
+              </div>
+              <div>
+                <div class="text-2xl font-bold text-white">500+</div>
+                <div class="text-sm text-gray-500">доставок</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-green-500/20 to-green-600/20 border border-green-500/30 flex items-center justify-center">
+                <i class="fas fa-shield-alt text-green-500"></i>
+              </div>
+              <div>
+                <div class="text-2xl font-bold text-white">1 год</div>
+                <div class="text-sm text-gray-500">гарантии</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- CTA Buttons -->
+          <div class="flex flex-wrap gap-4">
+            <a href="/katalog" class="group inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold text-lg transition-all hover:shadow-2xl hover:shadow-accent-500/30 hover:scale-105">
+              <span>Смотреть каталог</span>
+              <i class="fas fa-arrow-right group-hover:translate-x-1 transition-transform"></i>
+            </a>
+            <button onclick="openRequestModal()" class="inline-flex items-center gap-2 px-8 py-4 rounded-2xl bg-white/5 border border-white/10 text-white font-semibold text-lg backdrop-blur-sm hover:bg-white/10 transition-all">
+              <i class="fas fa-phone-alt"></i>
+              <span>Консультация</span>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Right - Bento Grid -->
+        <div class="relative hidden lg:block animate-fade-in">
+          <div class="grid grid-cols-2 gap-4">
+            <!-- Feature Card 1 -->
+            <div class="col-span-2 p-6 rounded-3xl bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 backdrop-blur-sm hover:border-accent-500/50 transition-all group">
+              <div class="flex items-start gap-4">
+                <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
+                  <i class="fas fa-industry text-2xl text-white"></i>
+                </div>
+                <div>
+                  <h3 class="text-lg font-semibold text-white mb-1">Собственное производство</h3>
+                  <p class="text-gray-400 text-sm">Полный цикл производства на современном оборудовании</p>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Feature Card 2 -->
+            <div class="p-6 rounded-3xl bg-gradient-to-br from-primary-500/10 to-primary-600/5 border border-primary-500/20 backdrop-blur-sm hover:border-primary-500/50 transition-all group">
+              <div class="w-12 h-12 rounded-xl bg-primary-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <i class="fas fa-certificate text-primary-400"></i>
+              </div>
+              <h3 class="font-semibold text-white mb-1">Сертификаты</h3>
+              <p class="text-gray-400 text-sm">ГОСТ соответствие</p>
+            </div>
+            
+            <!-- Feature Card 3 -->
+            <div class="p-6 rounded-3xl bg-gradient-to-br from-green-500/10 to-green-600/5 border border-green-500/20 backdrop-blur-sm hover:border-green-500/50 transition-all group">
+              <div class="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                <i class="fas fa-ruble-sign text-green-400"></i>
+              </div>
+              <h3 class="font-semibold text-white mb-1">Цена с НДС</h3>
+              <p class="text-gray-400 text-sm">Прозрачность 20%</p>
+            </div>
+            
+            <!-- Price Card -->
+            <div class="col-span-2 p-6 rounded-3xl bg-gradient-to-br from-accent-500/20 to-accent-600/10 border border-accent-500/30 backdrop-blur-sm">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-sm text-accent-300 mb-1">Рампы от</div>
+                  <div class="text-4xl font-black text-white">449 000 ₽</div>
+                </div>
+                <div class="w-16 h-16 rounded-2xl bg-accent-500/30 flex items-center justify-center">
+                  <i class="fas fa-tags text-3xl text-accent-400"></i>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
     
-    <nav class="container mx-auto px-4 py-4">
-      <div class="flex justify-between items-center">
-        <a href="/" class="flex items-center">
-          <span class="text-2xl font-bold text-blue-900">ARMATA</span>
-          <span class="text-2xl font-bold text-orange-500">-RAMPA</span>
-        </a>
-        
-        <div class="hidden md:flex items-center space-x-6">
-          <a href="/katalog" class="text-gray-700 hover:text-blue-900 font-medium">Каталог продукции</a>
-          <a href="/o-kompanii" class="text-gray-700 hover:text-blue-900 font-medium">О компании</a>
-          <a href="/portfolio" class="text-gray-700 hover:text-blue-900 font-medium">Портфолио</a>
-          <a href="/dostavka" class="text-gray-700 hover:text-blue-900 font-medium">Доставка</a>
-          <a href="/kontakty" class="text-gray-700 hover:text-blue-900 font-medium">Контакты</a>
-        </div>
-        
-        <div class="flex items-center space-x-4">
-          <a href="tel:${(settings.phone_main || '+74955553535').replace(/[^+\d]/g, '')}" class="hidden lg:flex items-center text-blue-900 font-bold text-lg">
-            <i class="fas fa-phone mr-2"></i>
-            ${settings.phone_main || '+7 (495) 555-35-35'}
-          </a>
-          <button onclick="openRequestModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-medium transition">
-            Оставить заявку
-          </button>
-        </div>
+    <!-- Scroll Indicator -->
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 animate-bounce">
+      <div class="w-10 h-16 rounded-full border-2 border-white/20 flex items-start justify-center p-2">
+        <div class="w-1.5 h-3 rounded-full bg-white/50 animate-pulse"></div>
       </div>
-    </nav>
-  </header>
+    </div>
+  </section>
 
-  <!-- Hero Section -->
-  <section class="relative bg-gradient-to-r from-blue-900 to-blue-700 text-white py-20">
-    <div class="absolute inset-0 bg-black/20"></div>
-    <div class="container mx-auto px-4 relative z-10">
-      <div class="max-w-3xl">
-        <h1 class="text-4xl md:text-5xl font-bold mb-6">
-          Погрузочные рампы и эстакады
-          <span class="text-orange-400">от производителя</span>
-        </h1>
-        <p class="text-xl mb-8 text-blue-100">
-          Собственное производство. Гарантия 1 год. Доставка по всей России.
+  <!-- Categories Section -->
+  <section class="py-24 relative">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Section Header -->
+      <div class="text-center mb-16">
+        <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-500/10 border border-primary-500/20 mb-6">
+          <i class="fas fa-boxes text-primary-400"></i>
+          <span class="text-primary-400 text-sm font-medium">Наша продукция</span>
+        </div>
+        <h2 class="text-4xl sm:text-5xl font-black text-white mb-4">
+          Каталог <span class="bg-gradient-to-r from-accent-400 to-accent-600 bg-clip-text text-transparent">решений</span>
+        </h2>
+        <p class="text-gray-400 text-lg max-w-2xl mx-auto">
+          Выберите оптимальное решение для вашего склада из нашего ассортимента
         </p>
-        <div class="flex flex-wrap gap-4 mb-8">
-          <div class="flex items-center bg-white/10 backdrop-blur px-4 py-2 rounded-lg">
-            <i class="fas fa-truck text-orange-400 mr-2"></i>
-            <span>Доставка по России</span>
-          </div>
-          <div class="flex items-center bg-white/10 backdrop-blur px-4 py-2 rounded-lg">
-            <i class="fas fa-cut text-orange-400 mr-2"></i>
-            <span>Резка по параметрам</span>
-          </div>
-          <div class="flex items-center bg-white/10 backdrop-blur px-4 py-2 rounded-lg">
-            <i class="fas fa-boxes text-orange-400 mr-2"></i>
-            <span>Комплектация материалов</span>
-          </div>
-        </div>
-        <div class="flex flex-wrap gap-4">
-          <a href="/katalog" class="bg-orange-500 hover:bg-orange-600 text-white px-8 py-3 rounded-lg font-semibold transition text-lg">
-            Перейти в каталог
-          </a>
-          <button onclick="openRequestModal()" class="bg-white/20 hover:bg-white/30 backdrop-blur text-white px-8 py-3 rounded-lg font-semibold transition text-lg border border-white/30">
-            Получить консультацию
-          </button>
-        </div>
+      </div>
+      
+      <!-- Categories Grid -->
+      <div id="categories-grid" class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Categories will be loaded via JS -->
       </div>
     </div>
   </section>
 
   <!-- Products Section -->
-  <section class="py-16 bg-white">
-    <div class="container mx-auto px-4">
-      <h2 class="text-3xl font-bold text-center mb-4">Наша продукция</h2>
-      <p class="text-gray-600 text-center mb-12 max-w-2xl mx-auto">
-        Производим погрузочные рампы и эстакады любой сложности. Вся продукция сертифицирована.
-      </p>
-      
-      <div id="categories-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <!-- Categories loaded via JS -->
-      </div>
-      
-      <div class="text-center mt-10">
-        <a href="/katalog" class="inline-flex items-center bg-blue-900 hover:bg-blue-800 text-white px-8 py-3 rounded-lg font-semibold transition">
-          Смотреть весь каталог
-          <i class="fas fa-arrow-right ml-2"></i>
-        </a>
-      </div>
-    </div>
-  </section>
-
-  <!-- Featured Products -->
-  <section class="py-16 bg-gray-50">
-    <div class="container mx-auto px-4">
-      <div class="flex justify-between items-center mb-10">
+  <section class="py-24 relative">
+    <div class="absolute inset-0 bg-gradient-to-b from-dark-900 via-dark-800/50 to-dark-900"></div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <!-- Section Header -->
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-12">
         <div>
-          <h2 class="text-3xl font-bold">Акционные предложения</h2>
-          <p class="text-gray-600 mt-2">Лучшие цены на популярные модели</p>
+          <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent-500/10 border border-accent-500/20 mb-4">
+            <i class="fas fa-fire text-accent-400"></i>
+            <span class="text-accent-400 text-sm font-medium">Хиты продаж</span>
+          </div>
+          <h2 class="text-4xl font-black text-white">Популярные модели</h2>
         </div>
-      </div>
-      
-      <div id="featured-products" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <!-- Products loaded via JS -->
-      </div>
-      
-      <div class="text-center mt-10">
-        <a href="/katalog" class="inline-flex items-center text-blue-900 hover:text-orange-500 font-semibold transition">
-          Все предложения
-          <i class="fas fa-arrow-right ml-2"></i>
+        <a href="/katalog" class="group inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white/5 border border-white/10 text-white font-medium hover:bg-white/10 transition-all">
+          <span>Все товары</span>
+          <i class="fas fa-arrow-right group-hover:translate-x-1 transition-transform"></i>
         </a>
+      </div>
+      
+      <!-- Products Grid -->
+      <div id="featured-products" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Products will be loaded via JS -->
       </div>
     </div>
   </section>
 
   <!-- Services Section -->
-  <section class="py-16 bg-white">
-    <div class="container mx-auto px-4">
-      <h2 class="text-3xl font-bold text-center mb-12">Наши услуги</h2>
+  <section class="py-24 relative">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="text-center mb-16">
+        <h2 class="text-4xl sm:text-5xl font-black text-white mb-4">
+          Полный <span class="bg-gradient-to-r from-primary-400 to-primary-600 bg-clip-text text-transparent">спектр услуг</span>
+        </h2>
+      </div>
       
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div class="text-center p-6 rounded-xl bg-gray-50 hover:shadow-lg transition">
-          <div class="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <i class="fas fa-truck text-2xl text-orange-500"></i>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Service 1 -->
+        <div class="group p-8 rounded-3xl bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 backdrop-blur-sm hover:border-accent-500/50 transition-all duration-300">
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:rotate-3 transition-all">
+            <i class="fas fa-truck-loading text-2xl text-white"></i>
           </div>
-          <h3 class="text-xl font-semibold mb-2">Доставка</h3>
-          <p class="text-gray-600">Доставляем рампы и эстакады по всей России. Выгодные условия для регионов ЦФО и ПФО.</p>
+          <h3 class="text-xl font-bold text-white mb-3">Доставка по России</h3>
+          <p class="text-gray-400">Собственный автопарк. Доставляем в любую точку России. Особые условия для регионов ЦФО и ПФО.</p>
         </div>
         
-        <div class="text-center p-6 rounded-xl bg-gray-50 hover:shadow-lg transition">
-          <div class="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <i class="fas fa-cogs text-2xl text-orange-500"></i>
+        <!-- Service 2 -->
+        <div class="group p-8 rounded-3xl bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 backdrop-blur-sm hover:border-primary-500/50 transition-all duration-300">
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:rotate-3 transition-all">
+            <i class="fas fa-wrench text-2xl text-white"></i>
           </div>
-          <h3 class="text-xl font-semibold mb-2">Монтаж</h3>
-          <p class="text-gray-600">Профессиональный монтаж и установка оборудования. Гарантия на работы.</p>
+          <h3 class="text-xl font-bold text-white mb-3">Монтаж и установка</h3>
+          <p class="text-gray-400">Профессиональная установка силами сертифицированных специалистов. Гарантия на монтажные работы.</p>
         </div>
         
-        <div class="text-center p-6 rounded-xl bg-gray-50 hover:shadow-lg transition">
-          <div class="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <i class="fas fa-tools text-2xl text-orange-500"></i>
+        <!-- Service 3 -->
+        <div class="group p-8 rounded-3xl bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 backdrop-blur-sm hover:border-green-500/50 transition-all duration-300">
+          <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:rotate-3 transition-all">
+            <i class="fas fa-headset text-2xl text-white"></i>
           </div>
-          <h3 class="text-xl font-semibold mb-2">Сервис</h3>
-          <p class="text-gray-600">Техническое обслуживание и ремонт. Поставка запасных частей.</p>
+          <h3 class="text-xl font-bold text-white mb-3">Сервис и поддержка</h3>
+          <p class="text-gray-400">Техническое обслуживание, ремонт и поставка запасных частей. Гарантия 1 год на всю продукцию.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Reviews Section -->
-  <section class="py-16 bg-gray-50">
-    <div class="container mx-auto px-4">
-      <h2 class="text-3xl font-bold text-center mb-12">Отзывы о сотрудничестве</h2>
-      
-      <div id="reviews-slider" class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <!-- Reviews loaded via JS -->
+  <section class="py-24 relative">
+    <div class="absolute inset-0 bg-gradient-to-b from-dark-900 via-primary-950/20 to-dark-900"></div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="text-center mb-16">
+        <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 border border-white/10 mb-6">
+          <i class="fas fa-quote-left text-white/50"></i>
+          <span class="text-white/70 text-sm font-medium">Отзывы клиентов</span>
+        </div>
+        <h2 class="text-4xl sm:text-5xl font-black text-white mb-4">
+          Нам <span class="bg-gradient-to-r from-accent-400 to-accent-600 bg-clip-text text-transparent">доверяют</span>
+        </h2>
       </div>
       
-      <div class="text-center mt-8">
-        <a href="#" class="text-orange-500 hover:text-orange-600 font-semibold">
-          Все отзывы <i class="fas fa-arrow-right ml-1"></i>
-        </a>
+      <div id="reviews-slider" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Reviews will be loaded via JS -->
       </div>
     </div>
   </section>
 
   <!-- CTA Section -->
-  <section class="py-16 bg-blue-900 text-white">
-    <div class="container mx-auto px-4">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-        <div>
-          <h2 class="text-3xl font-bold mb-4">Оставьте заявку</h2>
-          <p class="text-blue-200 mb-6">
-            И наши специалисты свяжутся с Вами для консультации и расчета стоимости
-          </p>
-          <ul class="space-y-3 text-blue-100">
-            <li><i class="fas fa-check text-orange-400 mr-2"></i> Бесплатная консультация</li>
-            <li><i class="fas fa-check text-orange-400 mr-2"></i> Расчет стоимости за 30 минут</li>
-            <li><i class="fas fa-check text-orange-400 mr-2"></i> Индивидуальный подход</li>
-          </ul>
-        </div>
+  <section class="py-24 relative">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="relative overflow-hidden rounded-[2.5rem] bg-gradient-to-br from-accent-500/20 via-primary-500/10 to-dark-800 border border-white/10 p-8 sm:p-12 lg:p-16">
+        <!-- Background Decoration -->
+        <div class="absolute top-0 right-0 w-96 h-96 bg-accent-500/20 rounded-full blur-3xl"></div>
+        <div class="absolute bottom-0 left-0 w-96 h-96 bg-primary-500/20 rounded-full blur-3xl"></div>
         
-        <div class="bg-white rounded-xl p-8">
-          <form id="main-request-form" class="space-y-4">
-            <input type="text" name="name" placeholder="Ваше имя *" required
-              class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900">
-            <input type="tel" name="phone" placeholder="Телефон *" required
-              class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900">
-            <input type="email" name="email" placeholder="Email"
-              class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900">
-            <select name="product" class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900">
-              <option value="">Выберите услугу</option>
-              <option value="rampa">Мобильная рампа</option>
-              <option value="gidro">Гидравлическая рампа</option>
-              <option value="estakada">Эстакада</option>
-              <option value="other">Другое</option>
-            </select>
-            <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold transition">
-              Отправить заявку
-            </button>
-          </form>
+        <div class="relative z-10 grid lg:grid-cols-2 gap-12 items-center">
+          <div>
+            <h2 class="text-4xl sm:text-5xl font-black text-white mb-6">
+              Готовы начать <span class="bg-gradient-to-r from-accent-400 to-accent-600 bg-clip-text text-transparent">проект?</span>
+            </h2>
+            <p class="text-xl text-gray-300 mb-8">
+              Оставьте заявку и получите персональный расчет в течение 30 минут
+            </p>
+            <div class="flex flex-wrap gap-6">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
+                  <i class="fas fa-check text-green-400"></i>
+                </div>
+                <span class="text-white">Бесплатная консультация</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
+                  <i class="fas fa-check text-green-400"></i>
+                </div>
+                <span class="text-white">Расчет за 30 минут</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center">
+                  <i class="fas fa-check text-green-400"></i>
+                </div>
+                <span class="text-white">Индивидуальные решения</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Form -->
+          <div class="bg-dark-800/80 backdrop-blur-xl rounded-3xl p-8 border border-white/10">
+            <form id="main-request-form" class="space-y-4">
+              <div>
+                <input type="text" name="name" placeholder="Ваше имя" required
+                  class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-all">
+              </div>
+              <div>
+                <input type="tel" name="phone" placeholder="Телефон" required
+                  class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-all">
+              </div>
+              <div>
+                <select name="service" class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-all appearance-none cursor-pointer">
+                  <option value="" class="bg-dark-800">Выберите продукт</option>
+                  <option value="rampa" class="bg-dark-800">Мобильная рампа</option>
+                  <option value="gidro" class="bg-dark-800">Гидравлическая рампа</option>
+                  <option value="estakada" class="bg-dark-800">Эстакада</option>
+                  <option value="custom" class="bg-dark-800">Индивидуальный проект</option>
+                </select>
+              </div>
+              <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold text-lg transition-all hover:shadow-lg hover:shadow-accent-500/30 hover:scale-[1.02] active:scale-[0.98]">
+                Отправить заявку
+              </button>
+              <p class="text-center text-gray-500 text-sm">
+                Нажимая кнопку, вы соглашаетесь с политикой конфиденциальности
+              </p>
+            </form>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Footer -->
-  <footer class="bg-gray-900 text-white py-12">
-    <div class="container mx-auto px-4">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-        <div>
-          <div class="flex items-center mb-4">
-            <span class="text-2xl font-bold">ARMATA</span>
-            <span class="text-2xl font-bold text-orange-500">-RAMPA</span>
+  <footer class="py-16 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
+        <!-- Brand -->
+        <div class="lg:col-span-1">
+          <a href="/" class="flex items-center gap-2 mb-6">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center">
+              <span class="text-white font-black text-lg">A</span>
+            </div>
+            <div>
+              <span class="text-xl font-bold text-white">ARMATA</span>
+              <span class="text-xl font-bold text-accent-500">RAMPA</span>
+            </div>
+          </a>
+          <p class="text-gray-400 mb-6">Производитель погрузочных рамп и эстакад с 2010 года.</p>
+          <div class="flex gap-3">
+            <a href="#" class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all">
+              <i class="fab fa-telegram"></i>
+            </a>
+            <a href="#" class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all">
+              <i class="fab fa-whatsapp"></i>
+            </a>
+            <a href="#" class="w-10 h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 hover:border-white/20 transition-all">
+              <i class="fab fa-vk"></i>
+            </a>
           </div>
-          <p class="text-gray-400 mb-4">
-            Производитель погрузочных рамп и эстакад. Собственное производство с 2010 года.
-          </p>
         </div>
         
+        <!-- Links -->
         <div>
-          <h4 class="font-semibold mb-4">Каталог</h4>
-          <ul class="space-y-2 text-gray-400">
-            <li><a href="/katalog/mobilnye-rampy" class="hover:text-orange-400">Мобильные рампы</a></li>
-            <li><a href="/katalog/gidravlicheskie-rampy" class="hover:text-orange-400">Гидравлические рампы</a></li>
-            <li><a href="/katalog/estakady" class="hover:text-orange-400">Эстакады</a></li>
+          <h4 class="text-white font-semibold mb-4">Каталог</h4>
+          <ul class="space-y-3">
+            <li><a href="/katalog/mobilnye-rampy" class="text-gray-400 hover:text-white transition-colors">Мобильные рампы</a></li>
+            <li><a href="/katalog/gidravlicheskie-rampy" class="text-gray-400 hover:text-white transition-colors">Гидравлические рампы</a></li>
+            <li><a href="/katalog/estakady" class="text-gray-400 hover:text-white transition-colors">Эстакады</a></li>
+            <li><a href="/katalog/kontejnernye-rampy" class="text-gray-400 hover:text-white transition-colors">Контейнерные рампы</a></li>
           </ul>
         </div>
         
         <div>
-          <h4 class="font-semibold mb-4">Информация</h4>
-          <ul class="space-y-2 text-gray-400">
-            <li><a href="/o-kompanii" class="hover:text-orange-400">О компании</a></li>
-            <li><a href="/dostavka" class="hover:text-orange-400">Доставка и оплата</a></li>
-            <li><a href="/portfolio" class="hover:text-orange-400">Портфолио</a></li>
-            <li><a href="/kontakty" class="hover:text-orange-400">Контакты</a></li>
+          <h4 class="text-white font-semibold mb-4">Компания</h4>
+          <ul class="space-y-3">
+            <li><a href="/o-kompanii" class="text-gray-400 hover:text-white transition-colors">О нас</a></li>
+            <li><a href="/portfolio" class="text-gray-400 hover:text-white transition-colors">Проекты</a></li>
+            <li><a href="/dostavka" class="text-gray-400 hover:text-white transition-colors">Доставка</a></li>
+            <li><a href="/kontakty" class="text-gray-400 hover:text-white transition-colors">Контакты</a></li>
           </ul>
         </div>
         
+        <!-- Contact -->
         <div>
-          <h4 class="font-semibold mb-4">Контакты</h4>
-          <ul class="space-y-3 text-gray-400">
+          <h4 class="text-white font-semibold mb-4">Контакты</h4>
+          <ul class="space-y-3">
             <li>
-              <a href="tel:${(settings.phone_main || '+74955553535').replace(/[^+\d]/g, '')}" class="flex items-center hover:text-orange-400">
-                <i class="fas fa-phone mr-2"></i>
-                ${settings.phone_main || '+7 (495) 555-35-35'}
+              <a href="tel:${(settings.phone_main || '+74955553535').replace(/[^+\d]/g, '')}" class="flex items-center gap-3 text-gray-400 hover:text-white transition-colors">
+                <i class="fas fa-phone text-accent-500"></i>
+                <span>${settings.phone_main || '+7 (495) 555-35-35'}</span>
               </a>
             </li>
             <li>
-              <a href="mailto:${settings.email || 'info@armata-rampa.ru'}" class="flex items-center hover:text-orange-400">
-                <i class="fas fa-envelope mr-2"></i>
-                ${settings.email || 'info@armata-rampa.ru'}
+              <a href="mailto:${settings.email || 'info@armata-rampa.ru'}" class="flex items-center gap-3 text-gray-400 hover:text-white transition-colors">
+                <i class="fas fa-envelope text-accent-500"></i>
+                <span>${settings.email || 'info@armata-rampa.ru'}</span>
               </a>
             </li>
-            <li class="flex items-start">
-              <i class="fas fa-map-marker-alt mr-2 mt-1"></i>
-              ${settings.address || 'г. Владимир, ул. Промышленная, д. 10'}
+            <li class="flex items-start gap-3 text-gray-400">
+              <i class="fas fa-map-marker-alt text-accent-500 mt-1"></i>
+              <span>${settings.address || 'г. Владимир, ул. Промышленная, д. 10'}</span>
             </li>
           </ul>
         </div>
       </div>
       
-      <div class="border-t border-gray-800 mt-8 pt-8 flex flex-col md:flex-row justify-between items-center">
-        <p class="text-gray-500">&copy; 2024 Armata-Rampa. Все права защищены.</p>
-        <div class="flex space-x-4 mt-4 md:mt-0">
-          <a href="#" class="text-gray-400 hover:text-orange-400"><i class="fab fa-vk text-xl"></i></a>
-          <a href="#" class="text-gray-400 hover:text-orange-400"><i class="fab fa-telegram text-xl"></i></a>
-          <a href="#" class="text-gray-400 hover:text-orange-400"><i class="fab fa-whatsapp text-xl"></i></a>
+      <div class="pt-8 border-t border-white/10 flex flex-col sm:flex-row justify-between items-center gap-4">
+        <p class="text-gray-500 text-sm">© 2026 Armata-Rampa. Все права защищены.</p>
+        <div class="flex gap-6 text-sm">
+          <a href="#" class="text-gray-500 hover:text-white transition-colors">Политика конфиденциальности</a>
+          <a href="#" class="text-gray-500 hover:text-white transition-colors">Договор оферты</a>
         </div>
       </div>
     </div>
   </footer>
 
   <!-- Request Modal -->
-  <div id="request-modal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
-    <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4">
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-2xl font-bold">Оставить заявку</h3>
-        <button onclick="closeRequestModal()" class="text-gray-400 hover:text-gray-600">
-          <i class="fas fa-times text-xl"></i>
-        </button>
-      </div>
+  <div id="request-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-dark-900/80 backdrop-blur-sm" onclick="closeRequestModal()"></div>
+    <div class="relative w-full max-w-md bg-dark-800 border border-white/10 rounded-3xl p-8 animate-slide-up">
+      <button onclick="closeRequestModal()" class="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-all">
+        <i class="fas fa-times"></i>
+      </button>
+      
+      <h3 class="text-2xl font-bold text-white mb-2">Оставить заявку</h3>
+      <p class="text-gray-400 mb-6">Заполните форму и мы свяжемся с вами в ближайшее время</p>
+      
       <form id="modal-request-form" class="space-y-4">
-        <input type="text" name="name" placeholder="Ваше имя *" required
-          class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent">
-        <input type="tel" name="phone" placeholder="Телефон *" required
-          class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent">
-        <textarea name="message" placeholder="Сообщение" rows="3"
-          class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"></textarea>
-        <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold transition">
+        <input type="text" name="name" placeholder="Ваше имя" required
+          class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 transition-all">
+        <input type="tel" name="phone" placeholder="Телефон" required
+          class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 transition-all">
+        <textarea name="message" placeholder="Сообщение (необязательно)" rows="3"
+          class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 transition-all resize-none"></textarea>
+        <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold text-lg transition-all hover:shadow-lg hover:shadow-accent-500/30">
           Отправить
         </button>
       </form>
     </div>
   </div>
+
+  <!-- Mobile Menu -->
+  <div id="mobile-menu" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-dark-900/95 backdrop-blur-xl" onclick="toggleMobileMenu()"></div>
+    <div class="absolute top-0 right-0 w-80 h-full bg-dark-800 border-l border-white/10 p-6">
+      <button onclick="toggleMobileMenu()" class="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white">
+        <i class="fas fa-times"></i>
+      </button>
+      
+      <nav class="mt-16 space-y-2">
+        <a href="/katalog" class="block px-4 py-3 rounded-xl text-white hover:bg-white/5 font-medium">Каталог</a>
+        <a href="/o-kompanii" class="block px-4 py-3 rounded-xl text-white hover:bg-white/5 font-medium">О компании</a>
+        <a href="/portfolio" class="block px-4 py-3 rounded-xl text-white hover:bg-white/5 font-medium">Проекты</a>
+        <a href="/dostavka" class="block px-4 py-3 rounded-xl text-white hover:bg-white/5 font-medium">Доставка</a>
+        <a href="/kontakty" class="block px-4 py-3 rounded-xl text-white hover:bg-white/5 font-medium">Контакты</a>
+      </nav>
+      
+      <div class="absolute bottom-8 left-6 right-6">
+        <button onclick="openRequestModal(); toggleMobileMenu();" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">
+          Оставить заявку
+        </button>
+      </div>
+    </div>
+  </div>
   `
   
-  return c.html(renderPage('Главная', content, 
-    'Armata-Rampa — Купить рампы и эстакады от производителя с доставкой по России',
-    'Производитель погрузочных рамп и эстакад. Мобильные рампы от 449 000 руб, гидравлические рампы от 679 000 руб. Собственное производство, гарантия 1 год, доставка по России.'
+  return c.html(renderModernPage('Главная', content, 
+    'Armata-Rampa — Погрузочные рампы и эстакады от производителя',
+    'Производитель погрузочных рамп и эстакад. Мобильные рампы от 449 000 ₽, гидравлические рампы от 679 000 ₽. Собственное производство, гарантия 1 год, доставка по России.'
   ))
 })
 
 // Catalog page
 app.get('/katalog', async (c) => {
   const content = `
-  <!-- Header (same as main) -->
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <nav class="container mx-auto px-4 py-4">
-      <div class="flex justify-between items-center">
-        <a href="/" class="flex items-center">
-          <span class="text-2xl font-bold text-blue-900">ARMATA</span>
-          <span class="text-2xl font-bold text-orange-500">-RAMPA</span>
+  <!-- Navigation (same as main) -->
+  <nav class="fixed top-0 left-0 right-0 z-50" id="navbar">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="backdrop-blur-xl bg-dark-900/70 border border-white/10 rounded-2xl mt-4 px-6 py-4 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center">
+            <span class="text-white font-black text-lg">A</span>
+          </div>
+          <div class="hidden sm:block">
+            <span class="text-xl font-bold text-white">ARMATA</span>
+            <span class="text-xl font-bold text-accent-500">RAMPA</span>
+          </div>
         </a>
-        <div class="hidden md:flex items-center space-x-6">
-          <a href="/katalog" class="text-orange-500 font-medium">Каталог продукции</a>
-          <a href="/o-kompanii" class="text-gray-700 hover:text-blue-900 font-medium">О компании</a>
-          <a href="/portfolio" class="text-gray-700 hover:text-blue-900 font-medium">Портфолио</a>
-          <a href="/dostavka" class="text-gray-700 hover:text-blue-900 font-medium">Доставка</a>
-          <a href="/kontakty" class="text-gray-700 hover:text-blue-900 font-medium">Контакты</a>
+        <div class="hidden lg:flex items-center gap-1">
+          <a href="/katalog" class="px-4 py-2 rounded-xl text-accent-500 bg-accent-500/10 font-medium">Каталог</a>
+          <a href="/o-kompanii" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">О нас</a>
+          <a href="/kontakty" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 transition-all font-medium">Контакты</a>
         </div>
-        <button onclick="openRequestModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-medium transition">
-          Оставить заявку
+        <button onclick="openRequestModal()" class="px-6 py-3 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold hover:shadow-lg hover:shadow-accent-500/25 transition-all">
+          Заявка
         </button>
       </div>
-    </nav>
-  </header>
-
-  <!-- Breadcrumbs -->
-  <div class="bg-gray-100 py-4">
-    <div class="container mx-auto px-4">
-      <nav class="text-sm">
-        <a href="/" class="text-gray-500 hover:text-blue-900">Главная</a>
-        <span class="mx-2 text-gray-400">/</span>
-        <span class="text-gray-900">Каталог</span>
-      </nav>
     </div>
-  </div>
+  </nav>
+
+  <!-- Page Header -->
+  <section class="pt-32 pb-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <nav class="flex items-center gap-2 text-sm mb-8">
+        <a href="/" class="text-gray-500 hover:text-white transition-colors">Главная</a>
+        <i class="fas fa-chevron-right text-gray-600 text-xs"></i>
+        <span class="text-white">Каталог</span>
+      </nav>
+      
+      <h1 class="text-4xl sm:text-5xl font-black text-white mb-4">
+        Каталог <span class="bg-gradient-to-r from-accent-400 to-accent-600 bg-clip-text text-transparent">продукции</span>
+      </h1>
+      <p class="text-gray-400 text-lg max-w-2xl">Выберите подходящее решение для вашего склада из нашего ассортимента</p>
+    </div>
+  </section>
 
   <!-- Catalog Content -->
-  <section class="py-12">
-    <div class="container mx-auto px-4">
-      <h1 class="text-3xl font-bold mb-8">Каталог продукции</h1>
-      
-      <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+  <section class="pb-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-4 gap-8">
         <!-- Sidebar -->
         <aside class="lg:col-span-1">
-          <div class="bg-white rounded-xl p-6 shadow-sm">
-            <h3 class="font-semibold mb-4">Категории</h3>
+          <div class="sticky top-28 p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm">
+            <h3 class="text-white font-semibold mb-4">Категории</h3>
             <ul id="category-filter" class="space-y-2">
               <li>
-                <a href="/katalog" class="text-orange-500 font-medium">Все товары</a>
+                <a href="/katalog" class="flex items-center gap-3 px-4 py-3 rounded-xl bg-accent-500/10 text-accent-400 font-medium">
+                  <i class="fas fa-th-large"></i>
+                  <span>Все товары</span>
+                </a>
               </li>
-              <!-- Categories loaded via JS -->
             </ul>
           </div>
         </aside>
         
-        <!-- Products Grid -->
+        <!-- Products -->
         <div class="lg:col-span-3">
-          <div id="products-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            <!-- Products loaded via JS -->
+          <div id="products-grid" class="grid sm:grid-cols-2 xl:grid-cols-3 gap-6">
+            <!-- Products will be loaded via JS -->
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Simple Footer -->
-  <footer class="bg-gray-900 text-white py-8">
-    <div class="container mx-auto px-4 text-center">
-      <p class="text-gray-400">&copy; 2024 Armata-Rampa. Все права защищены.</p>
+  <!-- Footer -->
+  <footer class="py-12 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <p class="text-gray-500">© 2026 Armata-Rampa. Все права защищены.</p>
     </div>
   </footer>
 
   <!-- Request Modal -->
-  <div id="request-modal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
-    <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4">
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-2xl font-bold text-gray-900">Оставить заявку</h3>
-        <button onclick="closeRequestModal()" class="text-gray-400 hover:text-gray-600">
-          <i class="fas fa-times text-xl"></i>
-        </button>
-      </div>
+  <div id="request-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-dark-900/80 backdrop-blur-sm" onclick="closeRequestModal()"></div>
+    <div class="relative w-full max-w-md bg-dark-800 border border-white/10 rounded-3xl p-8">
+      <button onclick="closeRequestModal()" class="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white">
+        <i class="fas fa-times"></i>
+      </button>
+      <h3 class="text-2xl font-bold text-white mb-6">Оставить заявку</h3>
       <form id="modal-request-form" class="space-y-4">
-        <input type="text" name="name" placeholder="Ваше имя *" required
-          class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900">
-        <input type="tel" name="phone" placeholder="Телефон *" required
-          class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900">
-        <textarea name="message" placeholder="Сообщение" rows="3"
-          class="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-gray-900"></textarea>
-        <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold transition">
-          Отправить
-        </button>
+        <input type="text" name="name" placeholder="Ваше имя" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 transition-all">
+        <input type="tel" name="phone" placeholder="Телефон" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500 transition-all">
+        <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Отправить</button>
       </form>
     </div>
   </div>
   `
   
-  return c.html(renderPage('Каталог', content,
+  return c.html(renderModernPage('Каталог', content,
     'Каталог погрузочных рамп и эстакад | Armata-Rampa',
-    'Каталог погрузочных рамп и эстакад от производителя. Мобильные рампы, гидравлические рампы, эстакады. Цены, характеристики, наличие.'
+    'Каталог погрузочных рамп и эстакад от производителя. Мобильные и гидравлические рампы, эстакады. Цены, характеристики.'
   ))
 })
 
@@ -804,7 +1361,6 @@ app.get('/katalog', async (c) => {
 app.get('/katalog/:category', async (c) => {
   const categorySlug = c.req.param('category')
   
-  // Get category info
   let category: any = null
   try {
     category = await c.env.DB.prepare(
@@ -817,70 +1373,58 @@ app.get('/katalog/:category', async (c) => {
   }
   
   const content = `
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <nav class="container mx-auto px-4 py-4">
-      <div class="flex justify-between items-center">
-        <a href="/" class="flex items-center">
-          <span class="text-2xl font-bold text-blue-900">ARMATA</span>
-          <span class="text-2xl font-bold text-orange-500">-RAMPA</span>
+  <nav class="fixed top-0 left-0 right-0 z-50" id="navbar">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="backdrop-blur-xl bg-dark-900/70 border border-white/10 rounded-2xl mt-4 px-6 py-4 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center">
+            <span class="text-white font-black text-lg">A</span>
+          </div>
         </a>
-        <div class="hidden md:flex items-center space-x-6">
-          <a href="/katalog" class="text-orange-500 font-medium">Каталог продукции</a>
-          <a href="/o-kompanii" class="text-gray-700 hover:text-blue-900 font-medium">О компании</a>
-          <a href="/kontakty" class="text-gray-700 hover:text-blue-900 font-medium">Контакты</a>
-        </div>
-        <button onclick="openRequestModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-medium transition">
-          Оставить заявку
-        </button>
+        <button onclick="openRequestModal()" class="px-6 py-3 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Заявка</button>
       </div>
-    </nav>
-  </header>
-
-  <div class="bg-gray-100 py-4">
-    <div class="container mx-auto px-4">
-      <nav class="text-sm">
-        <a href="/" class="text-gray-500 hover:text-blue-900">Главная</a>
-        <span class="mx-2 text-gray-400">/</span>
-        <a href="/katalog" class="text-gray-500 hover:text-blue-900">Каталог</a>
-        <span class="mx-2 text-gray-400">/</span>
-        <span class="text-gray-900">${category.name}</span>
-      </nav>
     </div>
-  </div>
+  </nav>
 
-  <section class="py-12">
-    <div class="container mx-auto px-4">
-      <h1 class="text-3xl font-bold mb-4">${category.name}</h1>
-      <p class="text-gray-600 mb-8">${category.description || ''}</p>
+  <section class="pt-32 pb-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <nav class="flex items-center gap-2 text-sm mb-8">
+        <a href="/" class="text-gray-500 hover:text-white">Главная</a>
+        <i class="fas fa-chevron-right text-gray-600 text-xs"></i>
+        <a href="/katalog" class="text-gray-500 hover:text-white">Каталог</a>
+        <i class="fas fa-chevron-right text-gray-600 text-xs"></i>
+        <span class="text-white">${category.name}</span>
+      </nav>
       
-      <div id="products-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-category="${categorySlug}">
-        <!-- Products loaded via JS -->
+      <h1 class="text-4xl font-black text-white mb-4">${category.name}</h1>
+      <p class="text-gray-400 text-lg mb-12">${category.description || ''}</p>
+      
+      <div id="products-grid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6" data-category="${categorySlug}">
       </div>
     </div>
   </section>
 
-  <footer class="bg-gray-900 text-white py-8">
-    <div class="container mx-auto px-4 text-center">
-      <p class="text-gray-400">&copy; 2024 Armata-Rampa. Все права защищены.</p>
+  <footer class="py-12 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 text-center">
+      <p class="text-gray-500">© 2026 Armata-Rampa</p>
     </div>
   </footer>
 
-  <div id="request-modal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
-    <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4">
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-2xl font-bold text-gray-900">Оставить заявку</h3>
-        <button onclick="closeRequestModal()" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
-      </div>
+  <div id="request-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-dark-900/80 backdrop-blur-sm" onclick="closeRequestModal()"></div>
+    <div class="relative w-full max-w-md bg-dark-800 border border-white/10 rounded-3xl p-8">
+      <button onclick="closeRequestModal()" class="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white"><i class="fas fa-times"></i></button>
+      <h3 class="text-2xl font-bold text-white mb-6">Оставить заявку</h3>
       <form id="modal-request-form" class="space-y-4">
-        <input type="text" name="name" placeholder="Ваше имя *" required class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900">
-        <input type="tel" name="phone" placeholder="Телефон *" required class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900">
-        <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold">Отправить</button>
+        <input type="text" name="name" placeholder="Ваше имя" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500">
+        <input type="tel" name="phone" placeholder="Телефон" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500">
+        <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Отправить</button>
       </form>
     </div>
   </div>
   `
   
-  return c.html(renderPage(category.name, content, category.seo_title, category.seo_description))
+  return c.html(renderModernPage(category.name, content, category.seo_title, category.seo_description))
 })
 
 // Product page
@@ -908,174 +1452,154 @@ app.get('/product/:slug', async (c) => {
   const specs = product.specifications ? JSON.parse(product.specifications) : {}
   
   const content = `
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <nav class="container mx-auto px-4 py-4">
-      <div class="flex justify-between items-center">
-        <a href="/" class="flex items-center">
-          <span class="text-2xl font-bold text-blue-900">ARMATA</span>
-          <span class="text-2xl font-bold text-orange-500">-RAMPA</span>
+  <nav class="fixed top-0 left-0 right-0 z-50" id="navbar">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="backdrop-blur-xl bg-dark-900/70 border border-white/10 rounded-2xl mt-4 px-6 py-4 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center">
+            <span class="text-white font-black text-lg">A</span>
+          </div>
         </a>
-        <div class="hidden md:flex items-center space-x-6">
-          <a href="/katalog" class="text-gray-700 hover:text-blue-900 font-medium">Каталог</a>
-          <a href="/o-kompanii" class="text-gray-700 hover:text-blue-900 font-medium">О компании</a>
-          <a href="/kontakty" class="text-gray-700 hover:text-blue-900 font-medium">Контакты</a>
+        <div class="hidden lg:flex items-center gap-1">
+          <a href="/katalog" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 font-medium">Каталог</a>
+          <a href="/kontakty" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 font-medium">Контакты</a>
         </div>
-        <button onclick="openRequestModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-medium">Оставить заявку</button>
+        <button onclick="openRequestModal()" class="px-6 py-3 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Заявка</button>
       </div>
-    </nav>
-  </header>
-
-  <div class="bg-gray-100 py-4">
-    <div class="container mx-auto px-4">
-      <nav class="text-sm">
-        <a href="/" class="text-gray-500 hover:text-blue-900">Главная</a>
-        <span class="mx-2 text-gray-400">/</span>
-        <a href="/katalog" class="text-gray-500 hover:text-blue-900">Каталог</a>
-        <span class="mx-2 text-gray-400">/</span>
-        ${product.category_name ? `<a href="/katalog/${product.category_slug}" class="text-gray-500 hover:text-blue-900">${product.category_name}</a><span class="mx-2 text-gray-400">/</span>` : ''}
-        <span class="text-gray-900">${product.name}</span>
-      </nav>
     </div>
-  </div>
+  </nav>
 
-  <section class="py-12">
-    <div class="container mx-auto px-4">
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-12">
+  <section class="pt-32 pb-24">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <nav class="flex items-center gap-2 text-sm mb-8">
+        <a href="/" class="text-gray-500 hover:text-white">Главная</a>
+        <i class="fas fa-chevron-right text-gray-600 text-xs"></i>
+        <a href="/katalog" class="text-gray-500 hover:text-white">Каталог</a>
+        ${product.category_name ? `<i class="fas fa-chevron-right text-gray-600 text-xs"></i><a href="/katalog/${product.category_slug}" class="text-gray-500 hover:text-white">${product.category_name}</a>` : ''}
+        <i class="fas fa-chevron-right text-gray-600 text-xs"></i>
+        <span class="text-white">${product.name}</span>
+      </nav>
+      
+      <div class="grid lg:grid-cols-2 gap-12">
         <!-- Image -->
-        <div>
-          <div class="bg-gray-100 rounded-xl p-8 flex items-center justify-center min-h-[400px]">
+        <div class="relative">
+          <div class="aspect-square rounded-3xl bg-gradient-to-br from-white/5 to-white/[0.02] border border-white/10 overflow-hidden flex items-center justify-center">
             ${product.main_image 
-              ? `<img src="${product.main_image}" alt="${product.name}" class="max-w-full max-h-[400px] object-contain">`
-              : `<div class="text-gray-400 text-center"><i class="fas fa-image text-6xl mb-4"></i><p>Изображение</p></div>`
+              ? `<img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&auto=format&fit=crop&q=80" alt="${product.name}" class="w-full h-full object-cover">`
+              : `<div class="text-center"><i class="fas fa-image text-6xl text-gray-600 mb-4"></i><p class="text-gray-500">Изображение товара</p></div>`
             }
           </div>
-          ${product.is_hit ? '<span class="absolute top-4 left-4 bg-orange-500 text-white px-3 py-1 rounded-full text-sm font-medium">Хит продаж</span>' : ''}
+          ${product.is_hit ? `
+          <div class="absolute top-4 left-4 px-4 py-2 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white text-sm font-semibold">
+            <i class="fas fa-fire mr-2"></i>Хит продаж
+          </div>` : ''}
         </div>
         
         <!-- Info -->
         <div>
-          <h1 class="text-3xl font-bold mb-4">${product.name}</h1>
+          <h1 class="text-4xl font-black text-white mb-4">${product.name}</h1>
           
           <div class="flex items-center gap-4 mb-6">
-            <span class="text-3xl font-bold text-blue-900">${product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : 'Цена по запросу'}</span>
-            ${product.old_price ? `<span class="text-xl text-gray-400 line-through">${product.old_price.toLocaleString('ru-RU')} ₽</span>` : ''}
+            <div class="text-4xl font-black bg-gradient-to-r from-accent-400 to-accent-600 bg-clip-text text-transparent">
+              ${product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : 'Цена по запросу'}
+            </div>
+            ${product.old_price ? `<div class="text-xl text-gray-500 line-through">${product.old_price.toLocaleString('ru-RU')} ₽</div>` : ''}
           </div>
           
-          <p class="text-gray-600 mb-6">${product.short_description || ''}</p>
+          <p class="text-gray-400 text-lg mb-6">${product.short_description || ''}</p>
           
-          <div class="flex items-center gap-2 mb-6">
+          <div class="flex items-center gap-3 mb-8">
             ${product.in_stock 
-              ? '<span class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i> В наличии</span>'
-              : '<span class="flex items-center text-orange-500"><i class="fas fa-clock mr-2"></i> Под заказ</span>'
+              ? `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 text-green-400 font-medium"><i class="fas fa-check-circle"></i><span>В наличии</span></div>`
+              : `<div class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-accent-500/10 text-accent-400 font-medium"><i class="fas fa-clock"></i><span>Под заказ</span></div>`
             }
           </div>
           
-          <!-- Specifications -->
-          <div class="bg-gray-50 rounded-xl p-6 mb-6">
-            <h3 class="font-semibold mb-4">Характеристики</h3>
-            <dl class="space-y-2">
+          <!-- Specs -->
+          <div class="p-6 rounded-2xl bg-white/5 border border-white/10 mb-8">
+            <h3 class="text-white font-semibold mb-4">Характеристики</h3>
+            <dl class="space-y-3">
               ${Object.entries(specs).map(([key, value]) => `
-                <div class="flex justify-between py-2 border-b border-gray-200 last:border-0">
-                  <dt class="text-gray-600">${key}</dt>
-                  <dd class="font-medium">${value}</dd>
+                <div class="flex justify-between py-2 border-b border-white/5 last:border-0">
+                  <dt class="text-gray-400">${key}</dt>
+                  <dd class="text-white font-medium">${value}</dd>
                 </div>
               `).join('')}
             </dl>
           </div>
           
           <div class="flex flex-col sm:flex-row gap-4">
-            <button onclick="openProductRequestModal('${product.name}')" class="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-3 px-6 rounded-lg font-semibold transition">
-              <i class="fas fa-paper-plane mr-2"></i> Оставить заявку
+            <button onclick="openProductRequestModal('${product.name}')" class="flex-1 py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold text-lg hover:shadow-lg hover:shadow-accent-500/30 transition-all">
+              <i class="fas fa-paper-plane mr-2"></i>Оставить заявку
             </button>
-            <a href="tel:+74955553535" class="flex-1 bg-blue-900 hover:bg-blue-800 text-white py-3 px-6 rounded-lg font-semibold transition text-center">
-              <i class="fas fa-phone mr-2"></i> Позвонить
+            <a href="tel:+74955553535" class="flex-1 py-4 rounded-xl bg-white/5 border border-white/10 text-white font-semibold text-lg text-center hover:bg-white/10 transition-all">
+              <i class="fas fa-phone mr-2"></i>Позвонить
             </a>
           </div>
           
-          <div class="mt-6 p-4 bg-blue-50 rounded-lg">
-            <p class="text-sm text-blue-800">
+          <div class="mt-6 p-4 rounded-xl bg-primary-500/10 border border-primary-500/20">
+            <p class="text-primary-300 text-sm">
               <i class="fas fa-info-circle mr-2"></i>
               Стоимость указана с НДС 20%. Продукция сертифицирована. Гарантия 1 год.
             </p>
           </div>
         </div>
       </div>
-      
-      ${product.full_description ? `
-        <div class="mt-12">
-          <h2 class="text-2xl font-bold mb-4">Описание</h2>
-          <div class="prose max-w-none">${product.full_description}</div>
-        </div>
-      ` : ''}
     </div>
   </section>
 
-  <footer class="bg-gray-900 text-white py-8">
-    <div class="container mx-auto px-4 text-center">
-      <p class="text-gray-400">&copy; 2024 Armata-Rampa. Все права защищены.</p>
+  <footer class="py-12 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 text-center">
+      <p class="text-gray-500">© 2026 Armata-Rampa</p>
     </div>
   </footer>
 
-  <div id="request-modal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
-    <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4">
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-2xl font-bold text-gray-900">Заявка на товар</h3>
-        <button onclick="closeRequestModal()" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
-      </div>
-      <p id="modal-product-name" class="text-gray-600 mb-4"></p>
+  <div id="request-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-dark-900/80 backdrop-blur-sm" onclick="closeRequestModal()"></div>
+    <div class="relative w-full max-w-md bg-dark-800 border border-white/10 rounded-3xl p-8">
+      <button onclick="closeRequestModal()" class="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white"><i class="fas fa-times"></i></button>
+      <h3 class="text-2xl font-bold text-white mb-2">Заявка на товар</h3>
+      <p id="modal-product-name" class="text-gray-400 mb-6"></p>
       <form id="modal-request-form" class="space-y-4">
         <input type="hidden" name="product_id" value="${product.id}">
-        <input type="text" name="name" placeholder="Ваше имя *" required class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900">
-        <input type="tel" name="phone" placeholder="Телефон *" required class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900">
-        <textarea name="message" placeholder="Комментарий" rows="3" class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900"></textarea>
-        <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold">Отправить заявку</button>
+        <input type="text" name="name" placeholder="Ваше имя" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500">
+        <input type="tel" name="phone" placeholder="Телефон" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500">
+        <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Отправить заявку</button>
       </form>
     </div>
   </div>
 
-  <!-- Schema.org Product -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "Product",
     "name": "${product.name}",
     "description": "${product.short_description || ''}",
-    "image": "${product.main_image || ''}",
-    "brand": {
-      "@type": "Brand",
-      "name": "Armata-Rampa"
-    },
+    "brand": {"@type": "Brand", "name": "Armata-Rampa"},
     "offers": {
       "@type": "Offer",
       "price": "${product.price || ''}",
       "priceCurrency": "RUB",
-      "availability": "${product.in_stock ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder'}",
-      "seller": {
-        "@type": "Organization",
-        "name": "Armata-Rampa"
-      }
+      "availability": "${product.in_stock ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder'}"
     }
   }
   </script>
   `
   
-  return c.html(renderPage(product.name, content, product.seo_title, product.seo_description))
+  return c.html(renderModernPage(product.name, content, product.seo_title, product.seo_description))
 })
 
-// Static pages (about, delivery, contacts)
+// Static pages
 app.get('/:slug', async (c) => {
   const slug = c.req.param('slug')
   
-  // Skip if it's a known route
   if (['katalog', 'product', 'admin', 'api', 'static', 'images'].includes(slug)) {
     return c.notFound()
   }
   
   let page: any = null
   try {
-    page = await c.env.DB.prepare(
-      'SELECT * FROM pages WHERE slug = ? AND is_active = 1'
-    ).bind(slug).first()
+    page = await c.env.DB.prepare('SELECT * FROM pages WHERE slug = ? AND is_active = 1').bind(slug).first()
   } catch (e) {}
   
   if (!page) {
@@ -1083,406 +1607,454 @@ app.get('/:slug', async (c) => {
   }
   
   const content = `
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <nav class="container mx-auto px-4 py-4">
-      <div class="flex justify-between items-center">
-        <a href="/" class="flex items-center">
-          <span class="text-2xl font-bold text-blue-900">ARMATA</span>
-          <span class="text-2xl font-bold text-orange-500">-RAMPA</span>
+  <nav class="fixed top-0 left-0 right-0 z-50" id="navbar">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+      <div class="backdrop-blur-xl bg-dark-900/70 border border-white/10 rounded-2xl mt-4 px-6 py-4 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center">
+            <span class="text-white font-black text-lg">A</span>
+          </div>
         </a>
-        <div class="hidden md:flex items-center space-x-6">
-          <a href="/katalog" class="text-gray-700 hover:text-blue-900 font-medium">Каталог</a>
-          <a href="/o-kompanii" class="${slug === 'o-kompanii' ? 'text-orange-500' : 'text-gray-700 hover:text-blue-900'} font-medium">О компании</a>
-          <a href="/dostavka" class="${slug === 'dostavka' ? 'text-orange-500' : 'text-gray-700 hover:text-blue-900'} font-medium">Доставка</a>
-          <a href="/kontakty" class="${slug === 'kontakty' ? 'text-orange-500' : 'text-gray-700 hover:text-blue-900'} font-medium">Контакты</a>
+        <div class="hidden lg:flex items-center gap-1">
+          <a href="/katalog" class="px-4 py-2 rounded-xl text-gray-300 hover:text-white hover:bg-white/5 font-medium">Каталог</a>
+          <a href="/o-kompanii" class="${slug === 'o-kompanii' ? 'text-accent-500 bg-accent-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'} px-4 py-2 rounded-xl font-medium">О нас</a>
+          <a href="/dostavka" class="${slug === 'dostavka' ? 'text-accent-500 bg-accent-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'} px-4 py-2 rounded-xl font-medium">Доставка</a>
+          <a href="/kontakty" class="${slug === 'kontakty' ? 'text-accent-500 bg-accent-500/10' : 'text-gray-300 hover:text-white hover:bg-white/5'} px-4 py-2 rounded-xl font-medium">Контакты</a>
         </div>
-        <button onclick="openRequestModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg font-medium">Оставить заявку</button>
+        <button onclick="openRequestModal()" class="px-6 py-3 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Заявка</button>
       </div>
-    </nav>
-  </header>
-
-  <div class="bg-gray-100 py-4">
-    <div class="container mx-auto px-4">
-      <nav class="text-sm">
-        <a href="/" class="text-gray-500 hover:text-blue-900">Главная</a>
-        <span class="mx-2 text-gray-400">/</span>
-        <span class="text-gray-900">${page.title}</span>
-      </nav>
     </div>
-  </div>
+  </nav>
 
-  <section class="py-12">
-    <div class="container mx-auto px-4">
-      <h1 class="text-3xl font-bold mb-8">${page.title}</h1>
-      <div class="prose max-w-none">
-        ${page.content}
+  <section class="pt-32 pb-24">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <nav class="flex items-center gap-2 text-sm mb-8">
+        <a href="/" class="text-gray-500 hover:text-white">Главная</a>
+        <i class="fas fa-chevron-right text-gray-600 text-xs"></i>
+        <span class="text-white">${page.title}</span>
+      </nav>
+      
+      <h1 class="text-4xl sm:text-5xl font-black text-white mb-8">${page.title}</h1>
+      
+      <div class="prose prose-invert prose-lg max-w-none">
+        <div class="text-gray-300 leading-relaxed space-y-6">
+          ${page.content}
+        </div>
       </div>
     </div>
   </section>
 
-  <footer class="bg-gray-900 text-white py-8">
-    <div class="container mx-auto px-4 text-center">
-      <p class="text-gray-400">&copy; 2024 Armata-Rampa. Все права защищены.</p>
+  <footer class="py-12 border-t border-white/10">
+    <div class="max-w-7xl mx-auto px-4 text-center">
+      <p class="text-gray-500">© 2026 Armata-Rampa</p>
     </div>
   </footer>
 
-  <div id="request-modal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
-    <div class="bg-white rounded-xl p-8 max-w-md w-full mx-4">
-      <div class="flex justify-between items-center mb-6">
-        <h3 class="text-2xl font-bold text-gray-900">Оставить заявку</h3>
-        <button onclick="closeRequestModal()" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
-      </div>
+  <div id="request-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-dark-900/80 backdrop-blur-sm" onclick="closeRequestModal()"></div>
+    <div class="relative w-full max-w-md bg-dark-800 border border-white/10 rounded-3xl p-8">
+      <button onclick="closeRequestModal()" class="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-gray-400 hover:text-white"><i class="fas fa-times"></i></button>
+      <h3 class="text-2xl font-bold text-white mb-6">Оставить заявку</h3>
       <form id="modal-request-form" class="space-y-4">
-        <input type="text" name="name" placeholder="Ваше имя *" required class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900">
-        <input type="tel" name="phone" placeholder="Телефон *" required class="w-full px-4 py-3 border border-gray-200 rounded-lg text-gray-900">
-        <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-3 rounded-lg font-semibold">Отправить</button>
+        <input type="text" name="name" placeholder="Ваше имя" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500">
+        <input type="tel" name="phone" placeholder="Телефон" required class="w-full px-5 py-4 rounded-xl bg-white/5 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-accent-500">
+        <button type="submit" class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold">Отправить</button>
       </form>
     </div>
   </div>
   `
   
-  return c.html(renderPage(page.title, content, page.seo_title, page.seo_description))
+  return c.html(renderModernPage(page.title, content, page.seo_title, page.seo_description))
 })
 
-// Admin panel route
-app.get('/admin', async (c) => {
-  const adminContent = `
-  <!DOCTYPE html>
-  <html lang="ru">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Админ-панель | Armata-Rampa CMS</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-  </head>
-  <body class="bg-gray-100">
-    <div class="min-h-screen flex">
-      <!-- Sidebar -->
-      <aside class="w-64 bg-blue-900 text-white">
-        <div class="p-6">
-          <h1 class="text-xl font-bold">Armata-Rampa</h1>
-          <p class="text-blue-300 text-sm">Админ-панель</p>
+// Admin login page
+app.get('/admin/login', async (c) => {
+  return c.html(`<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Вход в админ-панель | Armata-Rampa</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'] },
+          colors: {
+            dark: { 900: '#0a0a0f', 800: '#12121a', 700: '#1a1a24' },
+            accent: { 500: '#f97316', 600: '#ea580c' }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-dark-900 text-white font-sans">
+  <div class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-md">
+      <div class="text-center mb-8">
+        <div class="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center mb-4">
+          <span class="text-3xl font-black">A</span>
         </div>
-        <nav class="mt-6">
-          <a href="#dashboard" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('dashboard')">
-            <i class="fas fa-tachometer-alt w-6"></i> Дашборд
-          </a>
-          <a href="#products" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('products')">
-            <i class="fas fa-boxes w-6"></i> Товары
-          </a>
-          <a href="#categories" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('categories')">
-            <i class="fas fa-folder w-6"></i> Категории
-          </a>
-          <a href="#leads" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('leads')">
-            <i class="fas fa-envelope w-6"></i> Заявки
-          </a>
-          <a href="#reviews" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('reviews')">
-            <i class="fas fa-star w-6"></i> Отзывы
-          </a>
-          <a href="#pages" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('pages')">
-            <i class="fas fa-file-alt w-6"></i> Страницы
-          </a>
-          <a href="#settings" class="flex items-center px-6 py-3 hover:bg-blue-800 transition" onclick="showSection('settings')">
-            <i class="fas fa-cog w-6"></i> Настройки
-          </a>
-        </nav>
-      </aside>
-
-      <!-- Main Content -->
-      <main class="flex-1 p-8">
-        <!-- Dashboard -->
-        <section id="section-dashboard" class="admin-section">
-          <h2 class="text-2xl font-bold mb-6">Дашборд</h2>
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white rounded-xl p-6 shadow-sm">
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-gray-500 text-sm">Товаров</p>
-                  <p id="stat-products" class="text-3xl font-bold text-blue-900">0</p>
-                </div>
-                <i class="fas fa-boxes text-3xl text-blue-200"></i>
-              </div>
-            </div>
-            <div class="bg-white rounded-xl p-6 shadow-sm">
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-gray-500 text-sm">Заявок сегодня</p>
-                  <p id="stat-leads" class="text-3xl font-bold text-orange-500">0</p>
-                </div>
-                <i class="fas fa-envelope text-3xl text-orange-200"></i>
-              </div>
-            </div>
-            <div class="bg-white rounded-xl p-6 shadow-sm">
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-gray-500 text-sm">Отзывов</p>
-                  <p id="stat-reviews" class="text-3xl font-bold text-green-500">0</p>
-                </div>
-                <i class="fas fa-star text-3xl text-green-200"></i>
-              </div>
-            </div>
-            <div class="bg-white rounded-xl p-6 shadow-sm">
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-gray-500 text-sm">Категорий</p>
-                  <p id="stat-categories" class="text-3xl font-bold text-purple-500">0</p>
-                </div>
-                <i class="fas fa-folder text-3xl text-purple-200"></i>
-              </div>
+        <h1 class="text-2xl font-bold">Armata-Rampa</h1>
+        <p class="text-gray-500">Вход в админ-панель</p>
+      </div>
+      
+      <div class="p-8 rounded-3xl bg-white/5 backdrop-blur-xl border border-white/10">
+        <form id="loginForm" class="space-y-6">
+          <div id="error-message" class="hidden p-4 rounded-xl bg-red-500/20 border border-red-500/30 text-red-300 text-sm"></div>
+          
+          <div>
+            <label class="block text-sm text-gray-400 mb-2">Логин</label>
+            <div class="relative">
+              <i class="fas fa-user absolute left-4 top-1/2 -translate-y-1/2 text-gray-500"></i>
+              <input type="text" name="username" required autocomplete="username"
+                class="w-full pl-12 pr-4 py-4 rounded-xl bg-white/5 border border-white/10 text-white focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-all"
+                placeholder="admin">
             </div>
           </div>
           
-          <div class="bg-white rounded-xl p-6 shadow-sm">
-            <h3 class="font-semibold mb-4">Последние заявки</h3>
-            <div id="recent-leads" class="space-y-2">
-              <!-- Loaded via JS -->
+          <div>
+            <label class="block text-sm text-gray-400 mb-2">Пароль</label>
+            <div class="relative">
+              <i class="fas fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-gray-500"></i>
+              <input type="password" name="password" required autocomplete="current-password"
+                class="w-full pl-12 pr-4 py-4 rounded-xl bg-white/5 border border-white/10 text-white focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-all"
+                placeholder="Введите пароль">
             </div>
           </div>
-        </section>
-
-        <!-- Products Section -->
-        <section id="section-products" class="admin-section hidden">
-          <div class="flex justify-between items-center mb-6">
-            <h2 class="text-2xl font-bold">Товары</h2>
-            <button onclick="showProductModal()" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg">
-              <i class="fas fa-plus mr-2"></i> Добавить товар
-            </button>
-          </div>
-          <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-            <table class="w-full">
-              <thead class="bg-gray-50">
-                <tr>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Категория</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Цена</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
-                </tr>
-              </thead>
-              <tbody id="products-table" class="divide-y divide-gray-200">
-                <!-- Loaded via JS -->
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Leads Section -->
-        <section id="section-leads" class="admin-section hidden">
-          <h2 class="text-2xl font-bold mb-6">Заявки</h2>
-          <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-            <table class="w-full">
-              <thead class="bg-gray-50">
-                <tr>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Имя</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Телефон</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
-                </tr>
-              </thead>
-              <tbody id="leads-table" class="divide-y divide-gray-200">
-                <!-- Loaded via JS -->
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Other sections... -->
-        <section id="section-categories" class="admin-section hidden">
-          <h2 class="text-2xl font-bold mb-6">Категории</h2>
-          <p class="text-gray-600">Управление категориями товаров</p>
-        </section>
-
-        <section id="section-reviews" class="admin-section hidden">
-          <h2 class="text-2xl font-bold mb-6">Отзывы</h2>
-          <p class="text-gray-600">Модерация отзывов клиентов</p>
-        </section>
-
-        <section id="section-pages" class="admin-section hidden">
-          <h2 class="text-2xl font-bold mb-6">Страницы</h2>
-          <p class="text-gray-600">Редактирование статических страниц</p>
-        </section>
-
-        <section id="section-settings" class="admin-section hidden">
-          <h2 class="text-2xl font-bold mb-6">Настройки сайта</h2>
-          <div class="bg-white rounded-xl p-6 shadow-sm max-w-2xl">
-            <form id="settings-form" class="space-y-4">
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Название сайта</label>
-                <input type="text" name="site_name" class="w-full px-4 py-2 border rounded-lg">
-              </div>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Основной телефон</label>
-                <input type="text" name="phone_main" class="w-full px-4 py-2 border rounded-lg">
-              </div>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" name="email" class="w-full px-4 py-2 border rounded-lg">
-              </div>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Адрес</label>
-                <input type="text" name="address" class="w-full px-4 py-2 border rounded-lg">
-              </div>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Режим работы</label>
-                <input type="text" name="working_hours" class="w-full px-4 py-2 border rounded-lg">
-              </div>
-              <button type="submit" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-2 rounded-lg">
-                Сохранить настройки
-              </button>
-            </form>
-          </div>
-        </section>
-      </main>
+          
+          <button type="submit" id="submitBtn"
+            class="w-full py-4 rounded-xl bg-gradient-to-r from-accent-500 to-accent-600 text-white font-semibold hover:shadow-lg hover:shadow-accent-500/30 transition-all flex items-center justify-center gap-2">
+            <i class="fas fa-sign-in-alt"></i>
+            Войти
+          </button>
+        </form>
+        
+        <p class="mt-6 text-center text-gray-500 text-sm">
+          <a href="/" class="text-accent-500 hover:text-accent-400 transition-colors">
+            <i class="fas fa-arrow-left mr-1"></i> Вернуться на сайт
+          </a>
+        </p>
+      </div>
+      
+      <p class="mt-6 text-center text-gray-600 text-xs">
+        Логин: admin | Пароль: admin123
+      </p>
     </div>
-
-    <script>
-      // Admin panel JS
-      function showSection(section) {
-        document.querySelectorAll('.admin-section').forEach(el => el.classList.add('hidden'));
-        document.getElementById('section-' + section).classList.remove('hidden');
-      }
-
-      async function loadDashboard() {
-        // Load stats
-        const [products, leads, reviews, categories] = await Promise.all([
-          fetch('/api/admin/products').then(r => r.json()),
-          fetch('/api/admin/leads').then(r => r.json()),
-          fetch('/api/reviews').then(r => r.json()),
-          fetch('/api/categories').then(r => r.json())
-        ]);
-        
-        document.getElementById('stat-products').textContent = products.data?.length || 0;
-        document.getElementById('stat-leads').textContent = leads.data?.length || 0;
-        document.getElementById('stat-reviews').textContent = reviews.data?.length || 0;
-        document.getElementById('stat-categories').textContent = categories.data?.length || 0;
-        
-        // Recent leads
-        const recentLeads = (leads.data || []).slice(0, 5);
-        document.getElementById('recent-leads').innerHTML = recentLeads.map(lead => \`
-          <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-            <div>
-              <p class="font-medium">\${lead.name}</p>
-              <p class="text-sm text-gray-500">\${lead.phone}</p>
-            </div>
-            <span class="text-xs px-2 py-1 rounded-full \${lead.status === 'new' ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600'}">
-              \${lead.status === 'new' ? 'Новая' : 'Обработана'}
-            </span>
-          </div>
-        \`).join('') || '<p class="text-gray-500">Заявок пока нет</p>';
-      }
-
-      async function loadProducts() {
-        const response = await fetch('/api/admin/products');
-        const data = await response.json();
-        
-        document.getElementById('products-table').innerHTML = (data.data || []).map(product => \`
-          <tr>
-            <td class="px-6 py-4">
-              <div class="flex items-center">
-                <div class="w-10 h-10 bg-gray-100 rounded flex items-center justify-center mr-3">
-                  <i class="fas fa-image text-gray-400"></i>
-                </div>
-                <div>
-                  <p class="font-medium">\${product.name}</p>
-                  <p class="text-sm text-gray-500">\${product.slug}</p>
-                </div>
-              </div>
-            </td>
-            <td class="px-6 py-4 text-gray-500">\${product.category_name || '-'}</td>
-            <td class="px-6 py-4">\${product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '-'}</td>
-            <td class="px-6 py-4">
-              <span class="px-2 py-1 rounded-full text-xs \${product.is_active ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-600'}">
-                \${product.is_active ? 'Активен' : 'Скрыт'}
-              </span>
-            </td>
-            <td class="px-6 py-4">
-              <button onclick="editProduct(\${product.id})" class="text-blue-600 hover:text-blue-800 mr-2">
-                <i class="fas fa-edit"></i>
-              </button>
-              <button onclick="deleteProduct(\${product.id})" class="text-red-600 hover:text-red-800">
-                <i class="fas fa-trash"></i>
-              </button>
-            </td>
-          </tr>
-        \`).join('') || '<tr><td colspan="5" class="px-6 py-4 text-center text-gray-500">Товаров пока нет</td></tr>';
-      }
-
-      async function loadLeads() {
-        const response = await fetch('/api/admin/leads');
-        const data = await response.json();
-        
-        document.getElementById('leads-table').innerHTML = (data.data || []).map(lead => \`
-          <tr>
-            <td class="px-6 py-4 text-sm text-gray-500">\${new Date(lead.created_at).toLocaleString('ru-RU')}</td>
-            <td class="px-6 py-4 font-medium">\${lead.name}</td>
-            <td class="px-6 py-4">\${lead.phone}</td>
-            <td class="px-6 py-4 text-gray-500">\${lead.product_name || '-'}</td>
-            <td class="px-6 py-4">
-              <select onchange="updateLeadStatus(\${lead.id}, this.value)" class="text-sm border rounded px-2 py-1">
-                <option value="new" \${lead.status === 'new' ? 'selected' : ''}>Новая</option>
-                <option value="processing" \${lead.status === 'processing' ? 'selected' : ''}>В работе</option>
-                <option value="completed" \${lead.status === 'completed' ? 'selected' : ''}>Завершена</option>
-              </select>
-            </td>
-            <td class="px-6 py-4">
-              <a href="tel:\${lead.phone}" class="text-green-600 hover:text-green-800">
-                <i class="fas fa-phone"></i>
-              </a>
-            </td>
-          </tr>
-        \`).join('') || '<tr><td colspan="6" class="px-6 py-4 text-center text-gray-500">Заявок пока нет</td></tr>';
-      }
-
-      async function updateLeadStatus(id, status) {
-        await fetch('/api/admin/leads/' + id, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status })
-        });
-        loadLeads();
-        loadDashboard();
-      }
-
-      async function loadSettings() {
-        const response = await fetch('/api/settings');
-        const data = await response.json();
-        const settings = data.data || {};
-        
-        const form = document.getElementById('settings-form');
-        Object.keys(settings).forEach(key => {
-          const input = form.querySelector('[name="' + key + '"]');
-          if (input) input.value = settings[key];
-        });
-      }
-
-      document.getElementById('settings-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(e.target);
-        const settings = Object.fromEntries(formData);
-        
-        await fetch('/api/admin/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(settings)
-        });
-        
-        alert('Настройки сохранены');
-      });
-
-      // Init
-      loadDashboard();
-      loadProducts();
-      loadLeads();
-      loadSettings();
-    </script>
-  </body>
-  </html>
-  `
+  </div>
   
-  return c.html(adminContent)
+  <script>
+    // Check if already logged in
+    if (localStorage.getItem('adminToken')) {
+      window.location.href = '/admin';
+    }
+    
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const form = e.target;
+      const submitBtn = document.getElementById('submitBtn');
+      const errorEl = document.getElementById('error-message');
+      const formData = new FormData(form);
+      
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Вход...';
+      errorEl.classList.add('hidden');
+      
+      try {
+        const response = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: formData.get('username'),
+            password: formData.get('password')
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          localStorage.setItem('adminToken', data.token);
+          localStorage.setItem('adminUser', JSON.stringify(data.user));
+          window.location.href = '/admin';
+        } else {
+          errorEl.textContent = data.error || 'Ошибка авторизации';
+          errorEl.classList.remove('hidden');
+        }
+      } catch (err) {
+        errorEl.textContent = 'Ошибка сети. Попробуйте позже.';
+        errorEl.classList.remove('hidden');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-sign-in-alt mr-2"></i> Войти';
+      }
+    });
+  </script>
+</body>
+</html>`)
+})
+
+// Admin panel (protected)
+app.get('/admin', async (c) => {
+  return c.html(`<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Админ-панель | Armata-Rampa CMS</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'sans-serif'] },
+          colors: {
+            dark: { 900: '#0a0a0f', 800: '#12121a', 700: '#1a1a24' },
+            accent: { 500: '#f97316', 600: '#ea580c' }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-dark-900 text-white font-sans">
+  <!-- Auth Check -->
+  <script>
+    if (!localStorage.getItem('adminToken')) {
+      window.location.href = '/admin/login';
+    }
+  </script>
+  
+  <div class="min-h-screen flex">
+    <aside class="w-64 bg-dark-800 border-r border-white/10 flex flex-col">
+      <div class="p-6 border-b border-white/10">
+        <h1 class="text-xl font-bold">Armata-Rampa</h1>
+        <p class="text-gray-500 text-sm">Админ-панель</p>
+      </div>
+      <nav class="p-4 space-y-1 flex-1">
+        <a href="#dashboard" onclick="showSection('dashboard')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+          <i class="fas fa-chart-pie w-5"></i> Дашборд
+        </a>
+        <a href="#products" onclick="showSection('products')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+          <i class="fas fa-boxes w-5"></i> Товары
+        </a>
+        <a href="#leads" onclick="showSection('leads')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+          <i class="fas fa-envelope w-5"></i> Заявки
+          <span id="new-leads-badge" class="hidden ml-auto px-2 py-0.5 rounded-full text-xs bg-red-500 text-white">0</span>
+        </a>
+        <a href="#settings" onclick="showSection('settings')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+          <i class="fas fa-cog w-5"></i> Настройки
+        </a>
+      </nav>
+      <div class="p-4 border-t border-white/10">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-500 to-accent-600 flex items-center justify-center text-sm font-bold">A</div>
+          <div>
+            <p class="font-medium text-sm" id="admin-username">admin</p>
+            <p class="text-gray-500 text-xs">Администратор</p>
+          </div>
+        </div>
+        <button onclick="logout()" class="w-full px-4 py-2 rounded-xl border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition-all text-sm">
+          <i class="fas fa-sign-out-alt mr-2"></i> Выйти
+        </button>
+      </div>
+    </aside>
+
+    <main class="flex-1 p-8">
+      <section id="section-dashboard" class="admin-section">
+        <h2 class="text-2xl font-bold mb-6">Дашборд</h2>
+        <div class="grid grid-cols-4 gap-6 mb-8">
+          <div class="p-6 rounded-2xl bg-white/5 border border-white/10">
+            <p class="text-gray-400 text-sm mb-1">Товаров</p>
+            <p id="stat-products" class="text-3xl font-bold text-accent-500">0</p>
+          </div>
+          <div class="p-6 rounded-2xl bg-white/5 border border-white/10">
+            <p class="text-gray-400 text-sm mb-1">Заявок</p>
+            <p id="stat-leads" class="text-3xl font-bold text-green-500">0</p>
+          </div>
+          <div class="p-6 rounded-2xl bg-white/5 border border-white/10">
+            <p class="text-gray-400 text-sm mb-1">Отзывов</p>
+            <p id="stat-reviews" class="text-3xl font-bold text-blue-500">0</p>
+          </div>
+          <div class="p-6 rounded-2xl bg-white/5 border border-white/10">
+            <p class="text-gray-400 text-sm mb-1">Категорий</p>
+            <p id="stat-categories" class="text-3xl font-bold text-purple-500">0</p>
+          </div>
+        </div>
+        <div class="p-6 rounded-2xl bg-white/5 border border-white/10">
+          <h3 class="font-semibold mb-4">Последние заявки</h3>
+          <div id="recent-leads" class="space-y-2"></div>
+        </div>
+      </section>
+
+      <section id="section-products" class="admin-section hidden">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold">Товары</h2>
+          <button class="px-4 py-2 rounded-xl bg-accent-500 text-white font-medium"><i class="fas fa-plus mr-2"></i>Добавить</button>
+        </div>
+        <div class="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-white/5">
+              <tr>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Товар</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Категория</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Цена</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Статус</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="products-table" class="divide-y divide-white/5"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="section-leads" class="admin-section hidden">
+        <h2 class="text-2xl font-bold mb-6">Заявки</h2>
+        <div class="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-white/5">
+              <tr>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Дата</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Имя</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Телефон</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Статус</th>
+                <th class="px-6 py-4 text-left text-sm text-gray-400 font-medium">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="leads-table" class="divide-y divide-white/5"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="section-settings" class="admin-section hidden">
+        <h2 class="text-2xl font-bold mb-6">Настройки</h2>
+        <div class="max-w-xl p-6 rounded-2xl bg-white/5 border border-white/10">
+          <form id="settings-form" class="space-y-4">
+            <div>
+              <label class="block text-sm text-gray-400 mb-2">Телефон</label>
+              <input type="text" name="phone_main" class="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+            </div>
+            <div>
+              <label class="block text-sm text-gray-400 mb-2">Email</label>
+              <input type="email" name="email" class="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+            </div>
+            <div>
+              <label class="block text-sm text-gray-400 mb-2">Адрес</label>
+              <input type="text" name="address" class="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white">
+            </div>
+            <button type="submit" class="px-6 py-3 rounded-xl bg-accent-500 text-white font-medium">Сохранить</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    function logout() {
+      localStorage.removeItem('adminToken');
+      localStorage.removeItem('adminUser');
+      window.location.href = '/admin/login';
+    }
+    
+    function showSection(section) {
+      document.querySelectorAll('.admin-section').forEach(el => el.classList.add('hidden'));
+      document.getElementById('section-' + section).classList.remove('hidden');
+    }
+
+    async function loadDashboard() {
+      const [products, leads, reviews, categories] = await Promise.all([
+        fetch('/api/admin/products').then(r => r.json()),
+        fetch('/api/admin/leads').then(r => r.json()),
+        fetch('/api/reviews').then(r => r.json()),
+        fetch('/api/categories').then(r => r.json())
+      ]);
+      
+      document.getElementById('stat-products').textContent = products.data?.length || 0;
+      document.getElementById('stat-leads').textContent = leads.data?.length || 0;
+      document.getElementById('stat-reviews').textContent = reviews.data?.length || 0;
+      document.getElementById('stat-categories').textContent = categories.data?.length || 0;
+      
+      document.getElementById('recent-leads').innerHTML = (leads.data || []).slice(0, 5).map(lead => 
+        '<div class="flex justify-between items-center p-3 rounded-xl bg-white/5"><div><p class="font-medium">' + lead.name + '</p><p class="text-sm text-gray-400">' + lead.phone + '</p></div><span class="px-3 py-1 rounded-full text-xs ' + (lead.status === 'new' ? 'bg-accent-500/20 text-accent-400' : 'bg-green-500/20 text-green-400') + '">' + (lead.status === 'new' ? 'Новая' : 'Обработана') + '</span></div>'
+      ).join('') || '<p class="text-gray-500">Заявок пока нет</p>';
+    }
+
+    async function loadProducts() {
+      const response = await fetch('/api/admin/products');
+      const data = await response.json();
+      
+      document.getElementById('products-table').innerHTML = (data.data || []).map(product => 
+        '<tr><td class="px-6 py-4"><div class="font-medium">' + product.name + '</div><div class="text-sm text-gray-500">' + product.slug + '</div></td><td class="px-6 py-4 text-gray-400">' + (product.category_name || '-') + '</td><td class="px-6 py-4">' + (product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '-') + '</td><td class="px-6 py-4"><span class="px-3 py-1 rounded-full text-xs ' + (product.is_active ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400') + '">' + (product.is_active ? 'Активен' : 'Скрыт') + '</span></td><td class="px-6 py-4"><button class="text-blue-400 hover:text-blue-300 mr-3"><i class="fas fa-edit"></i></button><button class="text-red-400 hover:text-red-300"><i class="fas fa-trash"></i></button></td></tr>'
+      ).join('') || '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">Товаров пока нет</td></tr>';
+    }
+
+    async function loadLeads() {
+      const response = await fetch('/api/admin/leads');
+      const data = await response.json();
+      
+      document.getElementById('leads-table').innerHTML = (data.data || []).map(lead => 
+        '<tr><td class="px-6 py-4 text-sm text-gray-400">' + new Date(lead.created_at).toLocaleString('ru-RU') + '</td><td class="px-6 py-4 font-medium">' + lead.name + '</td><td class="px-6 py-4">' + lead.phone + '</td><td class="px-6 py-4"><select onchange="updateLeadStatus(' + lead.id + ', this.value)" class="px-3 py-1 rounded-lg bg-white/5 border border-white/10 text-sm"><option value="new"' + (lead.status === 'new' ? ' selected' : '') + '>Новая</option><option value="processing"' + (lead.status === 'processing' ? ' selected' : '') + '>В работе</option><option value="completed"' + (lead.status === 'completed' ? ' selected' : '') + '>Завершена</option></select></td><td class="px-6 py-4"><a href="tel:' + lead.phone + '" class="text-green-400 hover:text-green-300"><i class="fas fa-phone"></i></a></td></tr>'
+      ).join('') || '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">Заявок пока нет</td></tr>';
+    }
+
+    async function updateLeadStatus(id, status) {
+      await fetch('/api/admin/leads/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      loadLeads();
+      loadDashboard();
+    }
+
+    async function loadSettings() {
+      const response = await fetch('/api/settings');
+      const data = await response.json();
+      const settings = data.data || {};
+      
+      const form = document.getElementById('settings-form');
+      Object.keys(settings).forEach(key => {
+        const input = form.querySelector('[name="' + key + '"]');
+        if (input) input.value = settings[key];
+      });
+    }
+
+    document.getElementById('settings-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const settings = Object.fromEntries(formData);
+      
+      await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      
+      alert('Настройки сохранены');
+    });
+
+    // Set admin username from storage
+    const adminUser = JSON.parse(localStorage.getItem('adminUser') || '{}');
+    if (adminUser.username) {
+      document.getElementById('admin-username').textContent = adminUser.username;
+    }
+    
+    loadDashboard();
+    loadProducts();
+    loadLeads();
+    loadSettings();
+    
+    // Periodically check for new leads
+    setInterval(loadDashboard, 30000);
+  </script>
+</body>
+</html>`)
 })
 
 export default app

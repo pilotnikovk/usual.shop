@@ -76,6 +76,12 @@ INSERT OR IGNORE INTO portfolio (title, description, client_name, location, comp
 ('Оснащение склада в Нижнем Новгороде', 'Установка двух мобильных рамп Т-9/7 для складского комплекса', 'АО "СкладСервис"', 'Нижний Новгород', '2024-08', '/images/portfolio/warehouse-nn.jpg'),
 ('Эстакада для автотранспортного предприятия', 'Изготовление и монтаж автомобильной эстакады по индивидуальному проекту', 'ООО "АвтоТранс"', 'Казань', '2024-10', '/images/portfolio/auto-estacade.jpg');
 
+-- Админ пользователь по умолчанию
+-- Пароль: admin123 (SHA-256 хеш)
+-- ВАЖНО: Смените пароль после первого входа!
+INSERT OR IGNORE INTO admin_users (username, email, password_hash, role, is_active) VALUES
+('admin', 'admin@armata-rampa.ru', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'superadmin', 1);
+
 -- Настройки сайта
 INSERT OR IGNORE INTO settings (key, value, type, description) VALUES
 ('site_name', 'Armata-Rampa', 'text', 'Название сайта'),
