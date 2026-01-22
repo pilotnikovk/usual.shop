@@ -792,7 +792,7 @@ app.get('/', async (c) => {
     <div class="max-w-7xl mx-auto">
       <div class="hidden lg:flex items-center justify-between px-6 py-2 border-b border-neutral-100 text-sm">
         <div class="flex items-center gap-6 text-neutral-600">
-          <span><i class="fas fa-map-marker-alt text-primary-500 mr-2"></i>${settings.address || 'г. Владимир, ул. Промышленная, д. 10'}</span>
+          <span><i class="fas fa-map-marker-alt text-primary-500 mr-2"></i>${settings.address || 'г. Ковров, ул. Свердлова, 108А'}</span>
           <span><i class="fas fa-clock text-primary-500 mr-2"></i>${settings.working_hours || 'Пн-Пт: 9:00-18:00'}</span>
         </div>
         <div class="flex items-center gap-4">
@@ -817,13 +817,13 @@ app.get('/', async (c) => {
         </div>
         
         <div class="flex items-center gap-4">
-          <a href="tel:${(settings.phone_main || '+74955553535').replace(/[^+\d]/g, '')}" class="hidden md:flex items-center gap-3">
+          <a href="tel:${(settings.phone_main || '+78006000093').replace(/[^+\d]/g, '')}" class="hidden md:flex items-center gap-3">
             <div class="w-12 h-12 rounded-xl bg-primary-50 flex items-center justify-center">
               <i class="fas fa-phone text-primary-600"></i>
             </div>
             <div>
               <div class="text-xs text-neutral-500">Звоните</div>
-              <div class="font-semibold text-neutral-800">${settings.phone_main || '+7 (495) 555-35-35'}</div>
+              <div class="font-semibold text-neutral-800">${settings.phone_main || '+7 (800) 600-00-93'}</div>
             </div>
           </a>
           <a href="#contact-form" class="hidden sm:inline-flex px-6 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl shadow-lg shadow-accent-500/30 transition-all">
@@ -871,7 +871,7 @@ app.get('/', async (c) => {
         </h1>
         
         <p class="text-xl text-white/80 mb-8 leading-relaxed">
-          ${settings.hero_description || 'Собственное производство во Владимире. Гарантия 1 год. Доставка по всей России. Цены от 250 000 ₽.'}
+          ${settings.hero_description || 'Собственное производство. Гарантия. Доставка по всей России.'}
         </p>
         
         <div class="flex flex-wrap gap-4">
@@ -999,7 +999,7 @@ app.get('/', async (c) => {
               </div>
               <div>
                 <div class="text-white/60 text-sm">Телефон</div>
-                <a href="tel:${settings.phone_main || '+74955553535'}" class="text-white font-semibold">${settings.phone_main || '+7 (495) 555-35-35'}</a>
+                <a href="tel:${settings.phone_main || '+78006000093'}" class="text-white font-semibold">${settings.phone_main || '+7 (800) 600-00-93'}</a>
               </div>
             </div>
             <div class="flex items-center gap-4">
@@ -1131,9 +1131,9 @@ app.get('/', async (c) => {
         <div>
           <h4 class="font-semibold mb-4">Контакты</h4>
           <ul class="space-y-2 text-neutral-400 text-sm">
-            <li><i class="fas fa-phone mr-2 text-primary-400"></i>${settings.phone_main || '+7 (495) 555-35-35'}</li>
+            <li><i class="fas fa-phone mr-2 text-primary-400"></i>${settings.phone_main || '+7 (800) 600-00-93'}</li>
             <li><i class="fas fa-envelope mr-2 text-primary-400"></i>${settings.email || 'info@ussil.ru'}</li>
-            <li><i class="fas fa-map-marker-alt mr-2 text-primary-400"></i>${settings.address || 'г. Владимир'}</li>
+            <li><i class="fas fa-map-marker-alt mr-2 text-primary-400"></i>${settings.address || 'г. Ковров'}</li>
           </ul>
         </div>
       </div>
@@ -1177,8 +1177,8 @@ app.get('/katalog', async (c) => {
           <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
         </div>
         <div class="flex items-center gap-4">
-          <a href="tel:${(settings.phone_main || '+74955553535').replace(/[^+\\d]/g, '')}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold">
-            <i class="fas fa-phone"></i> ${settings.phone_main || '+7 (495) 555-35-35'}
+          <a href="tel:${(settings.phone_main || '+78006000093').replace(/[^+\\d]/g, '')}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold">
+            <i class="fas fa-phone"></i> ${settings.phone_main || '+7 (800) 600-00-93'}
           </a>
           <button onclick="toggleMobileMenu()" class="lg:hidden w-10 h-10 rounded-lg bg-neutral-100 flex items-center justify-center">
             <i class="fas fa-bars text-neutral-600"></i>
@@ -1258,7 +1258,7 @@ app.get('/product/:slug', async (c) => {
   const slug = c.req.param('slug')
   const settings = c.get('settings')
   const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
-  const phoneMain = settings.phone_main || '+7 (495) 555-35-35'
+  const phoneMain = settings.phone_main || '+7 (800) 600-00-93'
   const phoneClean = phoneMain.replace(/[^+\d]/g, '')
   
   const content = `
@@ -1332,7 +1332,7 @@ app.get('/product/:slug', async (c) => {
 // Helper function for inner page header
 const getInnerPageHeader = (settings: Record<string, string>, activePage: string) => {
   const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
-  const phoneMain = settings.phone_main || '+7 (495) 555-35-35'
+  const phoneMain = settings.phone_main || '+7 (800) 600-00-93'
   const phoneClean = phoneMain.replace(/[^+\\d]/g, '')
   
   const pages = [
@@ -1410,7 +1410,7 @@ app.get('/o-kompanii', async (c) => {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 lg:gap-6 my-6 lg:my-8">
           <div class="p-5 lg:p-6 bg-primary-50 rounded-2xl">
             <h3 class="font-semibold text-primary-800 mb-2"><i class="fas fa-industry mr-2"></i>Собственное производство</h3>
-            <p class="text-primary-700 text-sm">Полный цикл производства на собственных мощностях во Владимире</p>
+            <p class="text-primary-700 text-sm">Полный цикл производства на собственных мощностях</p>
           </div>
           <div class="p-5 lg:p-6 bg-accent-50 rounded-2xl">
             <h3 class="font-semibold text-accent-800 mb-2"><i class="fas fa-certificate mr-2"></i>Сертификация</h3>
@@ -1460,7 +1460,7 @@ app.get('/kontakty', async (c) => {
               </div>
               <div>
                 <div class="text-sm text-neutral-500">Телефон</div>
-                <a href="tel:${(settings.phone_main || '+74955553535').replace(/[^+\\d]/g, '')}" class="text-lg font-semibold text-neutral-800">${settings.phone_main || '+7 (495) 555-35-35'}</a>
+                <a href="tel:${(settings.phone_main || '+78006000093').replace(/[^+\\d]/g, '')}" class="text-lg font-semibold text-neutral-800">${settings.phone_main || '+7 (800) 600-00-93'}</a>
               </div>
             </div>
           </div>
@@ -1484,7 +1484,7 @@ app.get('/kontakty', async (c) => {
               </div>
               <div>
                 <div class="text-sm text-neutral-500">Адрес</div>
-                <div class="text-base lg:text-lg font-semibold text-neutral-800">${settings.address || 'г. Владимир, ул. Промышленная, д. 10'}</div>
+                <div class="text-base lg:text-lg font-semibold text-neutral-800">${settings.address || 'г. Ковров, ул. Свердлова, 108А'}</div>
               </div>
             </div>
           </div>
@@ -2047,7 +2047,7 @@ app.get('/admin', async (c) => {
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Основной телефон</label>
-                <input type="text" name="phone_main" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="+7 (495) 555-35-35">
+                <input type="text" name="phone_main" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="+7 (800) 600-00-93">
               </div>
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">WhatsApp</label>
@@ -2063,7 +2063,7 @@ app.get('/admin', async (c) => {
               </div>
               <div class="md:col-span-2">
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Адрес</label>
-                <input type="text" name="address" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="г. Владимир, ул. Промышленная, д. 10">
+                <input type="text" name="address" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="г. Ковров, ул. Свердлова, 108А">
               </div>
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Время работы</label>
