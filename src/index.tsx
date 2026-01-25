@@ -799,18 +799,25 @@ app.post('/api/admin/upload', async (c) => {
     
     let imageUrl: string
     
-    // Try to use R2 if available
-    if (c.env.R2_BUCKET) {
+    // Try to use R2 if available and properly configured
+    const r2Bucket = c.env.R2_BUCKET
+    if (r2Bucket && typeof r2Bucket.put === 'function') {
       try {
-        await c.env.R2_BUCKET.put(`uploads/${filename}`, arrayBuffer, {
+        await r2Bucket.put(`uploads/${filename}`, arrayBuffer, {
           httpMetadata: {
             contentType: file.type
           }
         })
         // R2 public URL - configure in Cloudflare Dashboard
         const settings = c.get('settings')
-        const r2Domain = settings.r2_public_domain || 'https://images.ussil.ru'
-        imageUrl = `${r2Domain}/uploads/${filename}`
+        const r2Domain = settings.r2_public_domain
+        if (r2Domain) {
+          imageUrl = `${r2Domain}/uploads/${filename}`
+        } else {
+          // No public domain configured, use base64
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
+          imageUrl = 'data:' + file.type + ';base64,' + base64
+        }
       } catch (r2Error) {
         console.error('R2 upload failed, falling back to base64:', r2Error)
         // Fallback to base64
@@ -818,7 +825,7 @@ app.post('/api/admin/upload', async (c) => {
         imageUrl = 'data:' + file.type + ';base64,' + base64
       }
     } else {
-      // Fallback to base64 data URL
+      // No R2 configured - use base64 data URL
       const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
       imageUrl = 'data:' + file.type + ';base64,' + base64
     }
@@ -914,6 +921,15 @@ app.get('/', async (c) => {
   const siteName = settings.site_name || 'USSIL'
   const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
   const heroBgImage = settings.hero_bg_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=1920&h=1080&fit=crop'
+  
+  // Block visibility settings (default to true if not set)
+  const showCategories = settings.block_categories !== '0' && settings.block_categories !== 'false'
+  const showProducts = settings.block_products !== '0' && settings.block_products !== 'false'
+  const showAdvantages = settings.block_advantages !== '0' && settings.block_advantages !== 'false'
+  const showReviews = settings.block_reviews !== '0' && settings.block_reviews !== 'false'
+  const showContactForm = settings.block_contact_form !== '0' && settings.block_contact_form !== 'false'
+  const showCases = settings.block_cases !== '0' && settings.block_cases !== 'false'
+  const showWhatsApp = settings.block_whatsapp !== '0' && settings.block_whatsapp !== 'false'
   
   // Load cases and partners
   let cases: any[] = []
@@ -1051,6 +1067,7 @@ app.get('/', async (c) => {
     </div>
   </section>
 
+  ${showCategories ? `
   <!-- Categories -->
   <section class="py-16 lg:py-24">
     <div class="max-w-7xl mx-auto px-6">
@@ -1064,7 +1081,9 @@ app.get('/', async (c) => {
       </div>
     </div>
   </section>
+  ` : ''}
 
+  ${showProducts ? `
   <!-- Featured Products -->
   <section class="py-16 lg:py-24 bg-neutral-100">
     <div class="max-w-7xl mx-auto px-6">
@@ -1083,7 +1102,9 @@ app.get('/', async (c) => {
       </div>
     </div>
   </section>
+  ` : ''}
 
+  ${showAdvantages ? `
   <!-- Advantages -->
   <section class="py-16 lg:py-24">
     <div class="max-w-7xl mx-auto px-6">
@@ -1127,7 +1148,9 @@ app.get('/', async (c) => {
       </div>
     </div>
   </section>
+  ` : ''}
 
+  ${showReviews ? `
   <!-- Reviews Section -->
   <section class="py-16 lg:py-24 bg-neutral-100">
     <div class="max-w-7xl mx-auto px-6">
@@ -1141,7 +1164,9 @@ app.get('/', async (c) => {
       </div>
     </div>
   </section>
+  ` : ''}
 
+  ${showContactForm ? `
   <!-- Contact Form -->
   <section id="contact-form" class="py-16 lg:py-24 bg-primary-600">
     <div class="max-w-7xl mx-auto px-6">
@@ -1199,7 +1224,9 @@ app.get('/', async (c) => {
       </div>
     </div>
   </section>
+  ` : ''}
 
+  ${showCases && cases.length > 0 ? `
   <!-- Cases Section -->
   <section class="py-16 lg:py-24 bg-white">
     <div class="max-w-7xl mx-auto px-6">
@@ -1233,6 +1260,7 @@ app.get('/', async (c) => {
       </div>
     </div>
   </section>
+  ` : ''}
 
   <!-- Footer -->
   <footer class="bg-neutral-800 text-white py-12">
@@ -1283,6 +1311,7 @@ app.get('/', async (c) => {
     </div>
   </footer>
   
+  ${showWhatsApp ? `
   <!-- Floating WhatsApp Button -->
   <a href="https://wa.me/${(settings.phone_whatsapp || '+79001234567').replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Здравствуйте! Интересует информация о погрузочных рампах.')}" 
      target="_blank" 
@@ -1290,6 +1319,7 @@ app.get('/', async (c) => {
      title="Написать в WhatsApp">
     <i class="fab fa-whatsapp text-white text-3xl"></i>
   </a>
+  ` : ''}
   
   <script>
     function toggleMobileMenu() {
@@ -1299,11 +1329,12 @@ app.get('/', async (c) => {
     
     // Load categories
     async function loadCategories() {
+      const grid = document.getElementById('categories-grid');
+      if (!grid) return;
       try {
         const response = await fetch('/api/categories');
         const data = await response.json();
         if (data.success && data.data) {
-          const grid = document.getElementById('categories-grid');
           grid.innerHTML = data.data.map(cat => \`
             <a href="/katalog/\${cat.slug}" class="group p-8 bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all border border-neutral-100">
               <div class="w-16 h-16 rounded-2xl bg-primary-100 flex items-center justify-center mb-6 group-hover:bg-primary-500 transition-colors">
@@ -1319,11 +1350,12 @@ app.get('/', async (c) => {
     
     // Load products
     async function loadProducts() {
+      const grid = document.getElementById('featured-products');
+      if (!grid) return;
       try {
         const response = await fetch('/api/products');
         const data = await response.json();
         if (data.success && data.data) {
-          const grid = document.getElementById('featured-products');
           const products = data.data.slice(0, 6);
           grid.innerHTML = products.map(p => \`
             <a href="/product/\${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden">
@@ -1348,11 +1380,12 @@ app.get('/', async (c) => {
     
     // Load reviews
     async function loadReviews() {
+      const grid = document.getElementById('reviews-grid');
+      if (!grid) return;
       try {
         const response = await fetch('/api/reviews');
         const data = await response.json();
         if (data.success && data.data) {
-          const grid = document.getElementById('reviews-grid');
           const reviews = data.data.slice(0, 6);
           grid.innerHTML = reviews.map(r => \`
             <div class="bg-white p-6 rounded-2xl shadow-sm">
@@ -2231,6 +2264,7 @@ app.get('/admin', async (c) => {
           <button onclick="showSettingsTab('general')" class="tab-btn active px-4 py-2 rounded-lg text-sm font-medium transition-colors">Основные</button>
           <button onclick="showSettingsTab('contacts')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Контакты</button>
           <button onclick="showSettingsTab('hero')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Главная секция</button>
+          <button onclick="showSettingsTab('blocks')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Блоки на сайте</button>
           <button onclick="showSettingsTab('about')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">О компании</button>
           <button onclick="showSettingsTab('delivery')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">Доставка</button>
           <button onclick="showSettingsTab('seo')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium bg-neutral-100 text-neutral-600 transition-colors">SEO</button>
@@ -2347,6 +2381,84 @@ app.get('/admin', async (c) => {
                   <label class="block text-sm font-medium text-neutral-700 mb-2">Статистика 2 (текст)</label>
                   <input type="text" name="hero_stat2_label" class="w-full px-4 py-3 rounded-xl border border-neutral-200" placeholder="На рынке">
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Blocks Settings -->
+          <div id="settings-blocks" class="settings-tab hidden bg-white rounded-2xl p-6 shadow-sm border border-neutral-100">
+            <h3 class="text-lg font-semibold text-neutral-800 mb-4">Управление блоками на сайте</h3>
+            <p class="text-neutral-600 text-sm mb-6">Включите или отключите отображение блоков на главной странице</p>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Категории продукции</div>
+                  <div class="text-sm text-neutral-500">Секция с категориями товаров</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_categories" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Популярные товары</div>
+                  <div class="text-sm text-neutral-500">Секция с избранными товарами</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_products" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Преимущества</div>
+                  <div class="text-sm text-neutral-500">Секция "Почему выбирают нас"</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_advantages" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Отзывы клиентов</div>
+                  <div class="text-sm text-neutral-500">Секция с отзывами</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_reviews" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Форма заявки</div>
+                  <div class="text-sm text-neutral-500">Секция "Получите расчет стоимости"</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_contact_form" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Кейсы на главной</div>
+                  <div class="text-sm text-neutral-500">Секция с реализованными проектами</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_cases" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="flex items-center justify-between p-4 bg-neutral-50 rounded-xl">
+                <div>
+                  <div class="font-medium text-neutral-800">Кнопка WhatsApp</div>
+                  <div class="text-sm text-neutral-500">Плавающая кнопка в углу экрана</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" name="block_whatsapp" class="sr-only peer" checked>
+                  <div class="w-11 h-6 bg-neutral-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-100 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
               </div>
             </div>
           </div>
