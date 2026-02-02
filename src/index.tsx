@@ -1,18 +1,11 @@
+import 'dotenv/config'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { serveStatic } from 'hono/cloudflare-pages'
+import { serve } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
+import sql from './db'
 
 // Types
-type Bindings = {
-  DB: D1Database
-  JWT_SECRET: string
-  RESEND_API_KEY: string
-  ADMIN_EMAIL: string
-  R2_BUCKET: R2Bucket
-  TELEGRAM_BOT_TOKEN: string
-  TELEGRAM_CHAT_ID: string
-}
-
 type Variables = {
   settings: Record<string, string>
   admin: { id: number; username: string } | null
@@ -77,7 +70,7 @@ const hashPassword = async (password: string): Promise<string> => {
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
+const app = new Hono<{ Variables: Variables }>()
 
 // Middleware
 app.use('/api/*', cors())
@@ -85,9 +78,9 @@ app.use('/api/*', cors())
 // Load settings middleware
 app.use('*', async (c, next) => {
   try {
-    const result = await c.env.DB.prepare('SELECT key, value FROM settings').all()
+    const result = await sql`SELECT key, value FROM settings`
     const settings: Record<string, string> = {}
-    result.results?.forEach((row: any) => {
+    result.forEach((row: any) => {
       settings[row.key] = row.value
     })
     c.set('settings', settings)
@@ -109,22 +102,19 @@ app.get('/sitemap.xml', async (c) => {
   // Get all products
   let products: any[] = []
   try {
-    const result = await c.env.DB.prepare('SELECT slug, updated_at FROM products WHERE is_active = 1').all()
-    products = result.results || []
+    products = await sql`SELECT slug, updated_at FROM products WHERE is_active = 1`
   } catch (e) {}
   
   // Get all categories
   let categories: any[] = []
   try {
-    const result = await c.env.DB.prepare('SELECT slug, updated_at FROM categories WHERE is_active = 1').all()
-    categories = result.results || []
+    categories = await sql`SELECT slug, updated_at FROM categories WHERE is_active = 1`
   } catch (e) {}
   
   // Get all pages
   let pages: any[] = []
   try {
-    const result = await c.env.DB.prepare('SELECT slug, updated_at FROM pages WHERE is_active = 1').all()
-    pages = result.results || []
+    pages = await sql`SELECT slug, updated_at FROM pages WHERE is_active = 1`
   } catch (e) {}
   
   const today = new Date().toISOString().split('T')[0]
@@ -183,10 +173,8 @@ Sitemap: ${baseUrl}/sitemap.xml`, 200, { 'Content-Type': 'text/plain' })
 // Get all categories
 app.get('/api/categories', async (c) => {
   try {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order'
-    ).all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM categories WHERE is_active = 1 ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch categories' }, 500)
   }
@@ -196,19 +184,25 @@ app.get('/api/categories', async (c) => {
 app.get('/api/products', async (c) => {
   try {
     const categorySlug = c.req.query('category')
-    let query = `
-      SELECT p.*, c.name as category_name, c.slug as category_slug 
-      FROM products p 
-      LEFT JOIN categories c ON p.category_id = c.id 
-      WHERE p.is_active = 1
-    `
+    let data
     if (categorySlug) {
-      query += ` AND c.slug = '${categorySlug}'`
+      data = await sql`
+        SELECT p.*, c.name as category_name, c.slug as category_slug
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.is_active = 1 AND c.slug = ${categorySlug}
+        ORDER BY p.sort_order
+      `
+    } else {
+      data = await sql`
+        SELECT p.*, c.name as category_name, c.slug as category_slug
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.is_active = 1
+        ORDER BY p.sort_order
+      `
     }
-    query += ' ORDER BY p.sort_order'
-    
-    const result = await c.env.DB.prepare(query).all()
-    return c.json({ success: true, data: result.results })
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch products' }, 500)
   }
@@ -218,19 +212,20 @@ app.get('/api/products', async (c) => {
 app.get('/api/products/:slug', async (c) => {
   try {
     const slug = c.req.param('slug')
-    const result = await c.env.DB.prepare(`
-      SELECT p.*, c.name as category_name, c.slug as category_slug 
-      FROM products p 
-      LEFT JOIN categories c ON p.category_id = c.id 
-      WHERE p.slug = ? AND p.is_active = 1
-    `).bind(slug).first()
-    
+    const rows = await sql`
+      SELECT p.*, c.name as category_name, c.slug as category_slug
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.slug = ${slug} AND p.is_active = 1
+    `
+    const result = rows[0] || null
+
     if (!result) {
       return c.json({ success: false, error: 'Product not found' }, 404)
     }
-    
-    await c.env.DB.prepare('UPDATE products SET views_count = views_count + 1 WHERE slug = ?').bind(slug).run()
-    
+
+    await sql`UPDATE products SET views_count = views_count + 1 WHERE slug = ${slug}`
+
     return c.json({ success: true, data: result })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch product' }, 500)
@@ -240,10 +235,8 @@ app.get('/api/products/:slug', async (c) => {
 // Get reviews
 app.get('/api/reviews', async (c) => {
   try {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM reviews WHERE is_active = 1 AND is_approved = 1 ORDER BY created_at DESC'
-    ).all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM reviews WHERE is_active = 1 AND is_approved = 1 ORDER BY created_at DESC`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch reviews' }, 500)
   }
@@ -252,10 +245,8 @@ app.get('/api/reviews', async (c) => {
 // Get FAQ
 app.get('/api/faq', async (c) => {
   try {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM faq WHERE is_active = 1 ORDER BY sort_order'
-    ).all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM faq WHERE is_active = 1 ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch FAQ' }, 500)
   }
@@ -264,10 +255,8 @@ app.get('/api/faq', async (c) => {
 // Get portfolio
 app.get('/api/portfolio', async (c) => {
   try {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM portfolio WHERE is_active = 1 ORDER BY sort_order'
-    ).all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM portfolio WHERE is_active = 1 ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch portfolio' }, 500)
   }
@@ -277,10 +266,9 @@ app.get('/api/portfolio', async (c) => {
 app.get('/api/pages/:slug', async (c) => {
   try {
     const slug = c.req.param('slug')
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM pages WHERE slug = ? AND is_active = 1'
-    ).bind(slug).first()
-    
+    const rows = await sql`SELECT * FROM pages WHERE slug = ${slug} AND is_active = 1`
+    const result = rows[0] || null
+
     if (!result) {
       return c.json({ success: false, error: 'Page not found' }, 404)
     }
@@ -293,9 +281,9 @@ app.get('/api/pages/:slug', async (c) => {
 // Get settings
 app.get('/api/settings', async (c) => {
   try {
-    const result = await c.env.DB.prepare('SELECT key, value FROM settings').all()
+    const result = await sql`SELECT key, value FROM settings`
     const settings: Record<string, string> = {}
-    result.results?.forEach((row: any) => {
+    result.forEach((row: any) => {
       settings[row.key] = row.value
     })
     return c.json({ success: true, data: settings })
@@ -380,13 +368,13 @@ app.post('/api/leads', async (c) => {
     const utm_source = body.utm_source || ''
     const utm_medium = body.utm_medium || ''
     const utm_campaign = body.utm_campaign || ''
-    
-    await c.env.DB.prepare(`
+
+    await sql`
       INSERT INTO leads (name, phone, email, company, message, product_id, source, utm_source, utm_medium, utm_campaign)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(name, phone, email || '', company || '', message || '', product_id || null, source || 'website', utm_source, utm_medium, utm_campaign).run()
-    
-    sendEmailNotification(c.env, { name, phone, email, company, message, source })
+      VALUES (${name}, ${phone}, ${email || ''}, ${company || ''}, ${message || ''}, ${product_id || null}, ${source || 'website'}, ${utm_source}, ${utm_medium}, ${utm_campaign})
+    `
+
+    sendEmailNotification(process.env as any, { name, phone, email, company, message, source })
     
     return c.json({ success: true, message: 'Request submitted successfully' })
   } catch (e) {
@@ -401,27 +389,42 @@ app.post('/api/leads', async (c) => {
 app.post('/api/admin/login', async (c) => {
   try {
     const { username, password } = await c.req.json()
-    
+
     if (!username || !password) {
       return c.json({ success: false, error: 'Введите логин и пароль' }, 400)
     }
-    
+
     const passwordHash = await hashPassword(password)
-    
-    const admin = await c.env.DB.prepare(`
-      SELECT id, username, email, role FROM admin_users 
-      WHERE username = ? AND password_hash = ? AND is_active = 1
-    `).bind(username, passwordHash).first()
-    
+    console.log('Login attempt:', { username, passwordHash })
+
+    console.log('About to execute SQL query...')
+    let rows
+    try {
+      rows = await sql`
+        SELECT id, username, email, role, password_hash FROM admin_users
+        WHERE username = ${username} AND is_active = 1
+      `
+      console.log('SQL query executed successfully')
+      console.log('Query result:', rows)
+    } catch (sqlError: any) {
+      console.error('SQL query error:', sqlError)
+      throw sqlError
+    }
+
+    console.log('Found user:', rows[0] ? 'Yes' : 'No')
+    if (rows[0]) {
+      console.log('Password match:', rows[0].password_hash === passwordHash)
+    }
+
+    const admin = rows.find(u => u.password_hash === passwordHash)
+
     if (!admin) {
       return c.json({ success: false, error: 'Неверный логин или пароль' }, 401)
     }
+
+    await sql`UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ${admin.id}`
     
-    await c.env.DB.prepare(`
-      UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?
-    `).bind(admin.id).run()
-    
-    const secret = c.env.JWT_SECRET || 'default-secret-change-me'
+    const secret = process.env.JWT_SECRET || 'default-secret-change-me'
     const token = await createJWT({ id: admin.id, username: admin.username, role: admin.role }, secret)
     
     return c.json({ 
@@ -430,6 +433,8 @@ app.post('/api/admin/login', async (c) => {
       user: { id: admin.id, username: admin.username, email: admin.email, role: admin.role }
     })
   } catch (e: any) {
+    console.error('Login error:', e)
+    console.error('Error stack:', e.stack)
     return c.json({ success: false, error: 'Ошибка авторизации' }, 500)
   }
 })
@@ -442,7 +447,7 @@ app.get('/api/admin/verify', async (c) => {
     }
     
     const token = authHeader.slice(7)
-    const secret = c.env.JWT_SECRET || 'default-secret-change-me'
+    const secret = process.env.JWT_SECRET || 'default-secret-change-me'
     const payload = await verifyJWT(token, secret)
     
     if (!payload) {
@@ -457,13 +462,18 @@ app.get('/api/admin/verify', async (c) => {
 
 app.get('/api/admin/stats', async (c) => {
   try {
-    const [products, leads, newLeads, views] = await Promise.all([
-      c.env.DB.prepare('SELECT COUNT(*) as count FROM products WHERE is_active = 1').first(),
-      c.env.DB.prepare('SELECT COUNT(*) as count FROM leads').first(),
-      c.env.DB.prepare("SELECT COUNT(*) as count FROM leads WHERE status = 'new'").first(),
-      c.env.DB.prepare('SELECT SUM(views_count) as count FROM products').first()
+    const [productsRows, leadsRows, newLeadsRows, viewsRows] = await Promise.all([
+      sql`SELECT COUNT(*) as count FROM products WHERE is_active = 1`,
+      sql`SELECT COUNT(*) as count FROM leads`,
+      sql`SELECT COUNT(*) as count FROM leads WHERE status = 'new'`,
+      sql`SELECT SUM(views_count) as count FROM products`
     ])
-    
+
+    const products = productsRows[0] || null
+    const leads = leadsRows[0] || null
+    const newLeads = newLeadsRows[0] || null
+    const views = viewsRows[0] || null
+
     return c.json({
       success: true,
       stats: {
@@ -484,13 +494,13 @@ app.get('/api/admin/stats', async (c) => {
 
 app.get('/api/admin/leads', async (c) => {
   try {
-    const result = await c.env.DB.prepare(`
-      SELECT l.*, p.name as product_name 
-      FROM leads l 
-      LEFT JOIN products p ON l.product_id = p.id 
+    const data = await sql`
+      SELECT l.*, p.name as product_name
+      FROM leads l
+      LEFT JOIN products p ON l.product_id = p.id
       ORDER BY l.created_at DESC
-    `).all()
-    return c.json({ success: true, data: result.results })
+    `
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch leads' }, 500)
   }
@@ -500,11 +510,9 @@ app.put('/api/admin/leads/:id', async (c) => {
   try {
     const id = c.req.param('id')
     const { status, notes } = await c.req.json()
-    
-    await c.env.DB.prepare(`
-      UPDATE leads SET status = ?, notes = ?, processed_at = CURRENT_TIMESTAMP WHERE id = ?
-    `).bind(status, notes || '', id).run()
-    
+
+    await sql`UPDATE leads SET status = ${status}, notes = ${notes || ''}, processed_at = CURRENT_TIMESTAMP WHERE id = ${id}`
+
     return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to update lead' }, 500)
@@ -513,13 +521,13 @@ app.put('/api/admin/leads/:id', async (c) => {
 
 app.get('/api/admin/products', async (c) => {
   try {
-    const result = await c.env.DB.prepare(`
-      SELECT p.*, c.name as category_name 
-      FROM products p 
-      LEFT JOIN categories c ON p.category_id = c.id 
+    const data = await sql`
+      SELECT p.*, c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
       ORDER BY p.sort_order
-    `).all()
-    return c.json({ success: true, data: result.results })
+    `
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch products' }, 500)
   }
@@ -528,24 +536,21 @@ app.get('/api/admin/products', async (c) => {
 app.post('/api/admin/products', async (c) => {
   try {
     const body = await c.req.json()
-    const { 
+    const {
       category_id, slug, name, short_description, full_description,
       price, old_price, in_stock, is_hit, is_new, is_sale,
       specifications, seo_title, seo_description, seo_keywords,
       images, main_image, sort_order, is_active
     } = body
-    
-    const result = await c.env.DB.prepare(`
+
+    const result = await sql`
       INSERT INTO products (category_id, slug, name, short_description, full_description, price, old_price, in_stock, is_hit, is_new, is_sale, specifications, seo_title, seo_description, seo_keywords, images, main_image, sort_order, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      category_id, slug, name, short_description || '', full_description || '',
-      price, old_price || null, in_stock ? 1 : 0, is_hit ? 1 : 0, is_new ? 1 : 0, is_sale ? 1 : 0,
-      JSON.stringify(specifications || {}), seo_title || '', seo_description || '', seo_keywords || '',
-      JSON.stringify(images || []), main_image || '', sort_order || 0, is_active ? 1 : 0
-    ).run()
-    
-    return c.json({ success: true, id: result.meta.last_row_id })
+      VALUES (${category_id}, ${slug}, ${name}, ${short_description || ''}, ${full_description || ''}, ${price}, ${old_price || null}, ${in_stock ? 1 : 0}, ${is_hit ? 1 : 0}, ${is_new ? 1 : 0}, ${is_sale ? 1 : 0}, ${JSON.stringify(specifications || {})}, ${seo_title || ''}, ${seo_description || ''}, ${seo_keywords || ''}, ${JSON.stringify(images || [])}, ${main_image || ''}, ${sort_order || 0}, ${is_active ? 1 : 0})
+      RETURNING id
+    `
+    const newId = result[0].id
+
+    return c.json({ success: true, id: newId })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to create product' }, 500)
   }
@@ -555,27 +560,22 @@ app.put('/api/admin/products/:id', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req.json()
-    const { 
+    const {
       category_id, slug, name, short_description, full_description,
       price, old_price, in_stock, is_hit, is_new, is_sale,
       specifications, seo_title, seo_description, seo_keywords,
       images, main_image, sort_order, is_active
     } = body
-    
-    await c.env.DB.prepare(`
-      UPDATE products SET 
-        category_id = ?, slug = ?, name = ?, short_description = ?, full_description = ?,
-        price = ?, old_price = ?, in_stock = ?, is_hit = ?, is_new = ?, is_sale = ?,
-        specifications = ?, seo_title = ?, seo_description = ?, seo_keywords = ?,
-        images = ?, main_image = ?, sort_order = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(
-      category_id, slug, name, short_description || '', full_description || '',
-      price, old_price || null, in_stock ? 1 : 0, is_hit ? 1 : 0, is_new ? 1 : 0, is_sale ? 1 : 0,
-      JSON.stringify(specifications || {}), seo_title || '', seo_description || '', seo_keywords || '',
-      JSON.stringify(images || []), main_image || '', sort_order || 0, is_active ? 1 : 0, id
-    ).run()
-    
+
+    await sql`
+      UPDATE products SET
+        category_id = ${category_id}, slug = ${slug}, name = ${name}, short_description = ${short_description || ''}, full_description = ${full_description || ''},
+        price = ${price}, old_price = ${old_price || null}, in_stock = ${in_stock ? 1 : 0}, is_hit = ${is_hit ? 1 : 0}, is_new = ${is_new ? 1 : 0}, is_sale = ${is_sale ? 1 : 0},
+        specifications = ${JSON.stringify(specifications || {})}, seo_title = ${seo_title || ''}, seo_description = ${seo_description || ''}, seo_keywords = ${seo_keywords || ''},
+        images = ${JSON.stringify(images || [])}, main_image = ${main_image || ''}, sort_order = ${sort_order || 0}, is_active = ${is_active ? 1 : 0}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+    `
+
     return c.json({ success: true })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to update product' }, 500)
@@ -585,7 +585,7 @@ app.put('/api/admin/products/:id', async (c) => {
 app.delete('/api/admin/products/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    await c.env.DB.prepare('DELETE FROM products WHERE id = ?').bind(id).run()
+    await sql`DELETE FROM products WHERE id = ${id}`
     return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to delete product' }, 500)
@@ -595,13 +595,15 @@ app.delete('/api/admin/products/:id', async (c) => {
 app.put('/api/admin/settings', async (c) => {
   try {
     const settings = await c.req.json()
-    
+
     for (const [key, value] of Object.entries(settings)) {
-      await c.env.DB.prepare(`
-        INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-      `).bind(key, value).run()
+      await sql`
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (${key}, ${value}, CURRENT_TIMESTAMP)
+        ON CONFLICT (key) DO UPDATE SET value = ${value}, updated_at = CURRENT_TIMESTAMP
+      `
     }
-    
+
     return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to update settings' }, 500)
@@ -611,8 +613,8 @@ app.put('/api/admin/settings', async (c) => {
 // Admin Categories CRUD
 app.get('/api/admin/categories', async (c) => {
   try {
-    const result = await c.env.DB.prepare('SELECT * FROM categories ORDER BY sort_order').all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM categories ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch categories' }, 500)
   }
@@ -621,13 +623,15 @@ app.get('/api/admin/categories', async (c) => {
 app.post('/api/admin/categories', async (c) => {
   try {
     const { name, slug, description, seo_title, seo_description, seo_keywords, image_url, sort_order, is_active } = await c.req.json()
-    
-    const result = await c.env.DB.prepare(`
+
+    const result = await sql`
       INSERT INTO categories (name, slug, description, seo_title, seo_description, seo_keywords, image_url, sort_order, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(name, slug, description || '', seo_title || '', seo_description || '', seo_keywords || '', image_url || '', sort_order || 0, is_active ? 1 : 0).run()
-    
-    return c.json({ success: true, id: result.meta.last_row_id })
+      VALUES (${name}, ${slug}, ${description || ''}, ${seo_title || ''}, ${seo_description || ''}, ${seo_keywords || ''}, ${image_url || ''}, ${sort_order || 0}, ${is_active ? 1 : 0})
+      RETURNING id
+    `
+    const newId = result[0].id
+
+    return c.json({ success: true, id: newId })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to create category' }, 500)
   }
@@ -637,12 +641,12 @@ app.put('/api/admin/categories/:id', async (c) => {
   try {
     const id = c.req.param('id')
     const { name, slug, description, seo_title, seo_description, seo_keywords, image_url, sort_order, is_active } = await c.req.json()
-    
-    await c.env.DB.prepare(`
-      UPDATE categories SET name = ?, slug = ?, description = ?, seo_title = ?, seo_description = ?, seo_keywords = ?, image_url = ?, sort_order = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(name, slug, description || '', seo_title || '', seo_description || '', seo_keywords || '', image_url || '', sort_order || 0, is_active ? 1 : 0, id).run()
-    
+
+    await sql`
+      UPDATE categories SET name = ${name}, slug = ${slug}, description = ${description || ''}, seo_title = ${seo_title || ''}, seo_description = ${seo_description || ''}, seo_keywords = ${seo_keywords || ''}, image_url = ${image_url || ''}, sort_order = ${sort_order || 0}, is_active = ${is_active ? 1 : 0}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+    `
+
     return c.json({ success: true })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to update category' }, 500)
@@ -652,7 +656,7 @@ app.put('/api/admin/categories/:id', async (c) => {
 app.delete('/api/admin/categories/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    await c.env.DB.prepare('DELETE FROM categories WHERE id = ?').bind(id).run()
+    await sql`DELETE FROM categories WHERE id = ${id}`
     return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to delete category' }, 500)
@@ -662,8 +666,8 @@ app.delete('/api/admin/categories/:id', async (c) => {
 // Cases API
 app.get('/api/cases', async (c) => {
   try {
-    const result = await c.env.DB.prepare('SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order').all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch cases' }, 500)
   }
@@ -671,8 +675,8 @@ app.get('/api/cases', async (c) => {
 
 app.get('/api/admin/cases', async (c) => {
   try {
-    const result = await c.env.DB.prepare('SELECT * FROM cases ORDER BY sort_order').all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM cases ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch cases' }, 500)
   }
@@ -681,11 +685,13 @@ app.get('/api/admin/cases', async (c) => {
 app.post('/api/admin/cases', async (c) => {
   try {
     const { title, description, client_name, client_logo, location, completion_date, result_text, main_image, images, sort_order, is_active } = await c.req.json()
-    const result = await c.env.DB.prepare(`
+    const result = await sql`
       INSERT INTO cases (title, description, client_name, client_logo, location, completion_date, result_text, main_image, images, sort_order, is_active)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(title, description || '', client_name || '', client_logo || '', location || '', completion_date || '', result_text || '', main_image || '', JSON.stringify(images || []), sort_order || 0, is_active ? 1 : 0).run()
-    return c.json({ success: true, id: result.meta.last_row_id })
+      VALUES (${title}, ${description || ''}, ${client_name || ''}, ${client_logo || ''}, ${location || ''}, ${completion_date || ''}, ${result_text || ''}, ${main_image || ''}, ${JSON.stringify(images || [])}, ${sort_order || 0}, ${is_active ? 1 : 0})
+      RETURNING id
+    `
+    const newId = result[0].id
+    return c.json({ success: true, id: newId })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to create case' }, 500)
   }
@@ -695,10 +701,10 @@ app.put('/api/admin/cases/:id', async (c) => {
   try {
     const id = c.req.param('id')
     const { title, description, client_name, client_logo, location, completion_date, result_text, main_image, images, sort_order, is_active } = await c.req.json()
-    await c.env.DB.prepare(`
-      UPDATE cases SET title = ?, description = ?, client_name = ?, client_logo = ?, location = ?, completion_date = ?, result_text = ?, main_image = ?, images = ?, sort_order = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(title, description || '', client_name || '', client_logo || '', location || '', completion_date || '', result_text || '', main_image || '', JSON.stringify(images || []), sort_order || 0, is_active ? 1 : 0, id).run()
+    await sql`
+      UPDATE cases SET title = ${title}, description = ${description || ''}, client_name = ${client_name || ''}, client_logo = ${client_logo || ''}, location = ${location || ''}, completion_date = ${completion_date || ''}, result_text = ${result_text || ''}, main_image = ${main_image || ''}, images = ${JSON.stringify(images || [])}, sort_order = ${sort_order || 0}, is_active = ${is_active ? 1 : 0}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+    `
     return c.json({ success: true })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to update case' }, 500)
@@ -708,7 +714,7 @@ app.put('/api/admin/cases/:id', async (c) => {
 app.delete('/api/admin/cases/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    await c.env.DB.prepare('DELETE FROM cases WHERE id = ?').bind(id).run()
+    await sql`DELETE FROM cases WHERE id = ${id}`
     return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to delete case' }, 500)
@@ -718,8 +724,8 @@ app.delete('/api/admin/cases/:id', async (c) => {
 // Partners API
 app.get('/api/partners', async (c) => {
   try {
-    const result = await c.env.DB.prepare('SELECT * FROM partners WHERE is_active = 1 ORDER BY sort_order').all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM partners WHERE is_active = 1 ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch partners' }, 500)
   }
@@ -727,8 +733,8 @@ app.get('/api/partners', async (c) => {
 
 app.get('/api/admin/partners', async (c) => {
   try {
-    const result = await c.env.DB.prepare('SELECT * FROM partners ORDER BY sort_order').all()
-    return c.json({ success: true, data: result.results })
+    const data = await sql`SELECT * FROM partners ORDER BY sort_order`
+    return c.json({ success: true, data })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to fetch partners' }, 500)
   }
@@ -737,11 +743,13 @@ app.get('/api/admin/partners', async (c) => {
 app.post('/api/admin/partners', async (c) => {
   try {
     const { name, logo_url, website_url, description, sort_order, is_active } = await c.req.json()
-    const result = await c.env.DB.prepare(`
+    const result = await sql`
       INSERT INTO partners (name, logo_url, website_url, description, sort_order, is_active)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(name, logo_url || '', website_url || '', description || '', sort_order || 0, is_active ? 1 : 0).run()
-    return c.json({ success: true, id: result.meta.last_row_id })
+      VALUES (${name}, ${logo_url || ''}, ${website_url || ''}, ${description || ''}, ${sort_order || 0}, ${is_active ? 1 : 0})
+      RETURNING id
+    `
+    const newId = result[0].id
+    return c.json({ success: true, id: newId })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to create partner' }, 500)
   }
@@ -751,10 +759,10 @@ app.put('/api/admin/partners/:id', async (c) => {
   try {
     const id = c.req.param('id')
     const { name, logo_url, website_url, description, sort_order, is_active } = await c.req.json()
-    await c.env.DB.prepare(`
-      UPDATE partners SET name = ?, logo_url = ?, website_url = ?, description = ?, sort_order = ?, is_active = ?
-      WHERE id = ?
-    `).bind(name, logo_url || '', website_url || '', description || '', sort_order || 0, is_active ? 1 : 0, id).run()
+    await sql`
+      UPDATE partners SET name = ${name}, logo_url = ${logo_url || ''}, website_url = ${website_url || ''}, description = ${description || ''}, sort_order = ${sort_order || 0}, is_active = ${is_active ? 1 : 0}
+      WHERE id = ${id}
+    `
     return c.json({ success: true })
   } catch (e: any) {
     return c.json({ success: false, error: e.message || 'Failed to update partner' }, 500)
@@ -764,7 +772,7 @@ app.put('/api/admin/partners/:id', async (c) => {
 app.delete('/api/admin/partners/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    await c.env.DB.prepare('DELETE FROM partners WHERE id = ?').bind(id).run()
+    await sql`DELETE FROM partners WHERE id = ${id}`
     return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to delete partner' }, 500)
@@ -786,77 +794,49 @@ app.post('/api/admin/upload', async (c) => {
     if (!allowedTypes.includes(file.type)) {
       return c.json({ success: false, error: 'Недопустимый тип файла. Разрешены: JPEG, PNG, GIF, WebP, SVG' }, 400)
     }
-    
-    // Max 500KB for base64 storage (D1 has ~1MB limit per string)
-    if (file.size > 500 * 1024) {
-      return c.json({ success: false, error: 'Файл слишком большой. Максимум 500 КБ. Сожмите изображение перед загрузкой.' }, 400)
+
+    // Max 10MB for local file storage
+    if (file.size > 10 * 1024 * 1024) {
+      return c.json({ success: false, error: 'Файл слишком большой. Максимум 10 МБ.' }, 400)
     }
-    
+
     const arrayBuffer = await file.arrayBuffer()
     const timestamp = Date.now()
     const ext = file.name.split('.').pop() || 'jpg'
     const filename = `${timestamp}-${Math.random().toString(36).substring(7)}.${ext}`
-    
-    // Helper function to convert ArrayBuffer to base64 without stack overflow
-    function arrayBufferToBase64(buffer: ArrayBuffer): string {
-      const bytes = new Uint8Array(buffer)
-      const chunkSize = 8192
-      let binary = ''
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length))
-        binary += String.fromCharCode.apply(null, chunk as any)
-      }
-      return btoa(binary)
-    }
-    
-    let imageUrl: string
-    
-    // Try to use R2 if available and properly configured
-    const r2Bucket = c.env.R2_BUCKET
-    if (r2Bucket && typeof r2Bucket.put === 'function') {
-      try {
-        await r2Bucket.put(`uploads/${filename}`, arrayBuffer, {
-          httpMetadata: {
-            contentType: file.type
-          }
-        })
-        // R2 public URL - configure in Cloudflare Dashboard
-        const settings = c.get('settings')
-        const r2Domain = settings.r2_public_domain
-        if (r2Domain) {
-          imageUrl = `${r2Domain}/uploads/${filename}`
-        } else {
-          // No public domain configured, use base64
-          imageUrl = 'data:' + file.type + ';base64,' + arrayBufferToBase64(arrayBuffer)
-        }
-      } catch (r2Error) {
-        console.error('R2 upload failed, falling back to base64:', r2Error)
-        // Fallback to base64
-        imageUrl = 'data:' + file.type + ';base64,' + arrayBufferToBase64(arrayBuffer)
-      }
-    } else {
-      // No R2 configured - use base64 data URL
-      imageUrl = 'data:' + file.type + ';base64,' + arrayBufferToBase64(arrayBuffer)
-    }
-    
-    // Store in database (only metadata, URL may be truncated for large base64)
+
+    // Save to local filesystem
+    const fs = await import('fs/promises')
+    const path = await import('path')
+
+    const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
+    await fs.mkdir(uploadsDir, { recursive: true })
+
+    const buffer = Buffer.from(arrayBuffer)
+    const filePath = path.join(uploadsDir, filename)
+    await fs.writeFile(filePath, buffer)
+
+    const imageUrl = `/uploads/${filename}`
+
+    // Store in database
     try {
-      const result = await c.env.DB.prepare(`
+      const result = await sql`
         INSERT INTO uploads (filename, original_name, mime_type, size, url)
-        VALUES (?, ?, ?, ?, ?)
-      `).bind(filename, file.name, file.type, file.size, imageUrl).run()
-      
-      return c.json({ 
-        success: true, 
+        VALUES (${filename}, ${file.name}, ${file.type}, ${file.size}, ${imageUrl})
+        RETURNING id
+      `
+      const newId = result[0].id
+
+      return c.json({
+        success: true,
         url: imageUrl,
-        id: result.meta.last_row_id,
-        filename: file.name 
+        id: newId,
+        filename: file.name
       })
     } catch (dbError: any) {
-      // If database insert fails (too big), still return the URL
       console.error('DB insert failed:', dbError)
-      return c.json({ 
-        success: true, 
+      return c.json({
+        success: true,
         url: imageUrl,
         id: null,
         filename: file.name,
@@ -872,8 +852,8 @@ app.post('/api/admin/upload', async (c) => {
 // STATIC FILES
 // ==========================================
 
-app.use('/static/*', serveStatic())
-app.use('/images/*', serveStatic())
+app.use('/static/*', serveStatic({ root: './public' }))
+app.use('/uploads/*', serveStatic({ root: './public' }))
 
 // ==========================================
 // LIGHT THEME 2026 - CALM COLORS
@@ -956,12 +936,10 @@ app.get('/', async (c) => {
   let cases: any[] = []
   let partners: any[] = []
   try {
-    const casesResult = await c.env.DB.prepare('SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order LIMIT 6').all()
-    cases = casesResult.results || []
+    cases = await sql`SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order LIMIT 6`
   } catch (e) {}
   try {
-    const partnersResult = await c.env.DB.prepare('SELECT * FROM partners WHERE is_active = 1 ORDER BY sort_order').all()
-    partners = partnersResult.results || []
+    partners = await sql`SELECT * FROM partners WHERE is_active = 1 ORDER BY sort_order`
   } catch (e) {}
   
   const content = `
@@ -1556,8 +1534,8 @@ app.get('/katalog/:slug', async (c) => {
   // Get category info
   let category: any = null
   try {
-    const catResult = await c.env.DB.prepare('SELECT * FROM categories WHERE slug = ?').bind(slug).first()
-    category = catResult
+    const rows = await sql`SELECT * FROM categories WHERE slug = ${slug}`
+    category = rows[0] || null
   } catch (e) {}
   
   if (!category) {
@@ -2166,8 +2144,7 @@ app.get('/kejsy', async (c) => {
   // Load cases
   let cases: any[] = []
   try {
-    const casesResult = await c.env.DB.prepare('SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order').all()
-    cases = casesResult.results || []
+    cases = await sql`SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order`
   } catch (e) {}
   
   const content = `
@@ -2341,8 +2318,7 @@ app.get('/admin', async (c) => {
   // Load categories for product form
   let categories: any[] = []
   try {
-    const result = await c.env.DB.prepare('SELECT * FROM categories ORDER BY sort_order').all()
-    categories = result.results || []
+    categories = await sql`SELECT * FROM categories ORDER BY sort_order`
   } catch (e) {}
   
   const categoriesJson = JSON.stringify(categories)
@@ -4069,5 +4045,24 @@ app.get('/admin', async (c) => {
 </body>
 </html>`)
 })
+
+// ==========================================
+// SERVER STARTUP FOR NODE.JS
+// ==========================================
+
+const port = parseInt(process.env.PORT || '3000', 10)
+
+// Only start server if not in Vite dev mode
+if (process.env.NODE_ENV !== 'development' && typeof import.meta.env === 'undefined') {
+  serve({
+    fetch: app.fetch,
+    port,
+    hostname: '0.0.0.0'
+  })
+
+  console.log(`🚀 USSIL Server running on http://0.0.0.0:${port}`)
+  console.log(`📊 Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not configured'}`)
+  console.log(`🔐 Environment: ${process.env.NODE_ENV || 'development'}`)
+}
 
 export default app

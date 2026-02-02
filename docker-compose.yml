@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15-alpine
+    container_name: ussil-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ussil
+      POSTGRES_PASSWORD: ussil_password
+      POSTGRES_DB: ussil_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Автоматически применяем миграции при первом запуске
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ussil"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # USSIL приложение
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ussil-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://ussil:ussil_password@postgres:5432/ussil_db
+      JWT_SECRET: docker-dev-secret-change-in-production
+      ADMIN_EMAIL: admin@ussil.ru
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Монтируем uploads для персистентности
+      - ./public/uploads:/app/public/uploads
+
+volumes:
+  postgres_data:
+    driver: local

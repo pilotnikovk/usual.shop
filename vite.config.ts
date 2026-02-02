@@ -1,21 +1,31 @@
-import build from '@hono/vite-build/cloudflare-pages'
-import devServer from '@hono/vite-dev-server'
-import adapter from '@hono/vite-dev-server/cloudflare'
 import { defineConfig } from 'vite'
+import devServer from '@hono/vite-dev-server'
 
 export default defineConfig({
   plugins: [
-    build({
-      outputDir: 'dist'
-    }),
     devServer({
-      adapter,
       entry: 'src/index.tsx'
     })
   ],
   build: {
     outDir: 'dist',
-    copyPublicDir: true
+    lib: {
+      entry: 'src/index.tsx',
+      formats: ['es'],
+      fileName: 'index'
+    },
+    rollupOptions: {
+      external: ['hono', '@hono/node-server', 'postgres', 'fs', 'path', 'fs/promises'],
+      output: {
+        preserveModules: false
+      }
+    },
+    copyPublicDir: true,
+    ssr: true,
+    target: 'node18'
   },
-  publicDir: 'public'
+  publicDir: 'public',
+  ssr: {
+    noExternal: ['hono']
+  }
 })

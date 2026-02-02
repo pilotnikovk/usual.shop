@@ -9,6 +9,7 @@ dist/
 
 # Environment
 .env
+.env.local
 .dev.vars
 
 # Runtime
@@ -23,3 +24,10 @@ pids/
 # OS
 .DS_Store
 Thumbs.db
+
+# Uploads (ephemeral on Railway - files will be lost on redeploy)
+# Uncomment the line below if you want to exclude uploads from Git:
+# public/uploads/*
+#
+# WARNING: Railway has ephemeral filesystem. Uploaded files will be deleted on redeploy.
+# Either commit uploads to Git or migrate to cloud storage (S3, R2, etc.)
