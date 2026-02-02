@@ -4052,8 +4052,15 @@ app.get('/admin', async (c) => {
 
 const port = parseInt(process.env.PORT || '3000', 10)
 
+console.log('=== USSIL Server Starting ===')
+console.log('NODE_ENV:', process.env.NODE_ENV)
+console.log('PORT:', port)
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL)
+console.log('import.meta.env:', typeof import.meta.env)
+
 // Only start server if not in Vite dev mode
 if (process.env.NODE_ENV !== 'development' && typeof import.meta.env === 'undefined') {
+  console.log('Starting server...')
   serve({
     fetch: app.fetch,
     port,
@@ -4063,6 +4070,8 @@ if (process.env.NODE_ENV !== 'development' && typeof import.meta.env === 'undefi
   console.log(`🚀 USSIL Server running on http://0.0.0.0:${port}`)
   console.log(`📊 Database: ${process.env.DATABASE_URL ? 'Connected' : 'Not configured'}`)
   console.log(`🔐 Environment: ${process.env.NODE_ENV || 'development'}`)
+} else {
+  console.log('Server not started - in dev mode or Vite environment')
 }
 
 export default app
