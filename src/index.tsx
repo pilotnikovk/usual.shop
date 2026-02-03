@@ -396,12 +396,15 @@ const sendEmailNotification = async (lead: any) => {
 app.post('/api/leads', async (c) => {
   try {
     const body = await c.req.json()
+    console.log('📥 New lead submission:', body)
+
     const { name, phone, email, company, message, product_id, source } = body
-    
+
     if (!name || !phone) {
+      console.log('❌ Validation failed: missing name or phone')
       return c.json({ success: false, error: 'Name and phone are required' }, 400)
     }
-    
+
     const utm_source = body.utm_source || ''
     const utm_medium = body.utm_medium || ''
     const utm_campaign = body.utm_campaign || ''
@@ -410,6 +413,7 @@ app.post('/api/leads', async (c) => {
       INSERT INTO leads (name, phone, email, company, message, product_id, source, utm_source, utm_medium, utm_campaign)
       VALUES (${name}, ${phone}, ${email || ''}, ${company || ''}, ${message || ''}, ${product_id || null}, ${source || 'website'}, ${utm_source}, ${utm_medium}, ${utm_campaign})
     `
+    console.log('✅ Lead saved to database')
 
     // Send notifications (async, don't wait)
     sendEmailNotification({ name, phone, email, company, message, source }).catch(err => {
@@ -418,6 +422,7 @@ app.post('/api/leads', async (c) => {
 
     return c.json({ success: true, message: 'Request submitted successfully' })
   } catch (e) {
+    console.error('❌ Lead submission error:', e)
     return c.json({ success: false, error: 'Failed to submit request' }, 500)
   }
 })
@@ -1455,11 +1460,51 @@ app.get('/', async (c) => {
       } catch(e) { console.error('Error loading reviews', e); }
     }
     
+    // Handle contact form submission
+    async function handleContactFormSubmit(e) {
+      e.preventDefault();
+      const form = e.target;
+      const formData = new FormData(form);
+      const data = {
+        name: formData.get('name'),
+        phone: formData.get('phone'),
+        email: formData.get('email') || '',
+        message: formData.get('message') || '',
+        source: 'contact_form'
+      };
+
+      try {
+        const response = await fetch('/api/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          alert('✅ Спасибо! Ваша заявка принята. Мы свяжемся с вами в ближайшее время.');
+          form.reset();
+        } else {
+          alert('❌ Ошибка отправки. Попробуйте позже или позвоните нам.');
+        }
+      } catch (error) {
+        console.error('Form submission error:', error);
+        alert('❌ Ошибка отправки. Проверьте подключение к интернету.');
+      }
+    }
+
     // Load on page load
     document.addEventListener('DOMContentLoaded', () => {
       loadCategories();
       loadProducts();
       loadReviews();
+
+      // Attach contact form handler
+      const contactForm = document.getElementById('contactForm');
+      if (contactForm) {
+        contactForm.addEventListener('submit', handleContactFormSubmit);
+      }
     });
   </script>
   `
