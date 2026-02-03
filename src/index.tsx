@@ -364,7 +364,7 @@ const sendEmailNotification = async (lead: any) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: 'USSIL <noreply@ussil.ru>',
+        from: 'USSIL <onboarding@resend.dev>',
         to: [ADMIN_EMAIL],
         subject: `Новая заявка от ${lead.name}`,
         html: `
