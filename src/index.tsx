@@ -306,9 +306,15 @@ app.get('/api/settings', async (c) => {
 })
 
 // Send Telegram notification
-const sendTelegramNotification = async (env: Bindings, lead: any) => {
-  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return
-  
+const sendTelegramNotification = async (lead: any) => {
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
+  const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID
+
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log('Telegram not configured - skipping notification')
+    return
+  }
+
   try {
     const message = `🔔 *Новая заявка с сайта USSIL*
 
@@ -317,37 +323,49 @@ const sendTelegramNotification = async (env: Bindings, lead: any) => {
 
 ⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}`
 
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: env.TELEGRAM_CHAT_ID,
+        chat_id: TELEGRAM_CHAT_ID,
         text: message,
         parse_mode: 'Markdown'
       })
     })
+
+    if (response.ok) {
+      console.log('✅ Telegram notification sent')
+    } else {
+      console.error('❌ Telegram notification failed:', await response.text())
+    }
   } catch (e) {
     console.error('Failed to send Telegram notification:', e)
   }
 }
 
 // Send email notification via Resend API
-const sendEmailNotification = async (env: Bindings, lead: any) => {
+const sendEmailNotification = async (lead: any) => {
   // Always try to send Telegram notification
-  sendTelegramNotification(env, lead)
-  
-  if (!env.RESEND_API_KEY || !env.ADMIN_EMAIL) return
-  
+  sendTelegramNotification(lead)
+
+  const RESEND_API_KEY = process.env.RESEND_API_KEY
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL
+
+  if (!RESEND_API_KEY || !ADMIN_EMAIL) {
+    console.log('Email not configured - skipping email notification')
+    return
+  }
+
   try {
-    await fetch('https://api.resend.com/emails', {
+    const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         from: 'USSIL <noreply@ussil.ru>',
-        to: [env.ADMIN_EMAIL],
+        to: [ADMIN_EMAIL],
         subject: `Новая заявка от ${lead.name}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -363,6 +381,12 @@ const sendEmailNotification = async (env: Bindings, lead: any) => {
         `
       })
     })
+
+    if (response.ok) {
+      console.log('✅ Email notification sent to', ADMIN_EMAIL)
+    } else {
+      console.error('❌ Email notification failed:', await response.text())
+    }
   } catch (e) {
     console.error('Failed to send email:', e)
   }
@@ -387,8 +411,11 @@ app.post('/api/leads', async (c) => {
       VALUES (${name}, ${phone}, ${email || ''}, ${company || ''}, ${message || ''}, ${product_id || null}, ${source || 'website'}, ${utm_source}, ${utm_medium}, ${utm_campaign})
     `
 
-    sendEmailNotification(process.env as any, { name, phone, email, company, message, source })
-    
+    // Send notifications (async, don't wait)
+    sendEmailNotification({ name, phone, email, company, message, source }).catch(err => {
+      console.error('Notification error:', err)
+    })
+
     return c.json({ success: true, message: 'Request submitted successfully' })
   } catch (e) {
     return c.json({ success: false, error: 'Failed to submit request' }, 500)
