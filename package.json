@@ -1,5 +1,7 @@
 {
   "name": "ussil-cms",
+  "version": "1.0.0",
+  "description": "USSIL Industrial Equipment CMS - Railway Deployment",
   "type": "module",
   "scripts": {
     "dev": "vite",

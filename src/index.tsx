@@ -4076,10 +4076,11 @@ app.get('/admin', async (c) => {
 
 const port = parseInt(process.env.PORT || '3000', 10)
 
-console.log('=== USSIL Server Starting ===')
+console.log('=== USSIL CMS v1.0.0 ===')
+console.log('🚀 Starting server...')
 console.log('NODE_ENV:', process.env.NODE_ENV)
 console.log('PORT:', port)
-console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL)
+console.log('DATABASE_URL:', !!process.env.DATABASE_URL ? '✅ Connected' : '❌ Not configured')
 
 // Start server in production
 if (process.env.NODE_ENV === 'production') {
