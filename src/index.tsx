@@ -91,6 +91,19 @@ app.use('*', async (c, next) => {
 })
 
 // ==========================================
+// HEALTH CHECK
+// ==========================================
+
+// Simple health check endpoint for Railway
+app.get('/health', (c) => {
+  return c.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    database: !!process.env.DATABASE_URL
+  })
+})
+
+// ==========================================
 // SITEMAP & ROBOTS
 // ==========================================
 
@@ -3375,18 +3388,29 @@ app.get('/admin', async (c) => {
 
     document.getElementById('settings-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const formData = new FormData(e.target);
+      const form = e.target;
+      const formData = new FormData(form);
       const settings = {};
+
+      // Сначала добавляем все значения из formData
       formData.forEach((value, key) => {
         settings[key] = value;
       });
-      
+
+      // Важно! Добавляем все чекбоксы явно (включая неотмеченные)
+      const checkboxes = form.querySelectorAll('input[type="checkbox"]');
+      checkboxes.forEach(checkbox => {
+        if (checkbox.name) {
+          settings[checkbox.name] = checkbox.checked ? '1' : '0';
+        }
+      });
+
       const response = await fetch('/api/admin/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings)
       });
-      
+
       if (response.ok) {
         alert('Настройки успешно сохранены!');
       } else {
