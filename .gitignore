@@ -25,9 +25,8 @@ pids/
 .DS_Store
 Thumbs.db
 
-# Uploads (ephemeral on Railway - files will be lost on redeploy)
-# Uncomment the line below if you want to exclude uploads from Git:
-# public/uploads/*
-#
-# WARNING: Railway has ephemeral filesystem. Uploaded files will be deleted on redeploy.
-# Either commit uploads to Git or migrate to cloud storage (S3, R2, etc.)
+# Uploads
+# Files are stored in Railway Volume (persistent storage)
+# Keep the folder structure but ignore uploaded files
+public/uploads/*
+!public/uploads/.gitkeep

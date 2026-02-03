@@ -4084,6 +4084,20 @@ console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL)
 // Start server in production
 if (process.env.NODE_ENV === 'production') {
   console.log('Starting server in production mode...')
+
+  // Create uploads directory if it doesn't exist
+  import('fs/promises').then(async (fs) => {
+    import('path').then(async (path) => {
+      const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
+      try {
+        await fs.mkdir(uploadsDir, { recursive: true })
+        console.log('✅ Uploads directory ready:', uploadsDir)
+      } catch (e) {
+        console.error('❌ Failed to create uploads directory:', e)
+      }
+    })
+  })
+
   serve({
     fetch: app.fetch,
     port,
