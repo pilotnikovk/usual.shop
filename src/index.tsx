@@ -1860,7 +1860,6 @@ app.get('/product/:slug', async (c) => {
                     \${oldPriceWithVAT ? \`<span class="text-xl text-neutral-400 line-through">\${oldPriceWithVAT.toLocaleString('ru-RU')} ₽</span>\` : ''}
                   \` : '<span class="text-2xl font-bold text-primary-600">Цена по запросу</span>'}
                 </div>
-                <p class="text-sm text-neutral-500">Цена указана без НДС</p>
                 
                 <div class="flex items-center gap-3 mt-4">
                   \${product.in_stock 
@@ -2204,7 +2203,6 @@ app.get('/dostavka', async (c) => {
             <li><i class="fas fa-check text-green-500 mr-2"></i>Безналичный расчет (для юр. лиц)</li>
             <li><i class="fas fa-check text-green-500 mr-2"></i>Оплата по счету</li>
           </ul>
-          <p class="mt-4 text-neutral-500 text-sm">Все цены указаны с НДС 20%.</p>
         </div>
       </div>
     </div>
