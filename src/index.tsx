@@ -1413,11 +1413,10 @@ app.get('/', async (c) => {
         if (data.success && data.data) {
           const products = data.data.slice(0, 6);
           grid.innerHTML = products.map(p => {
-            const priceWithVAT = p.price ? Math.round(p.price * 1.22) : null;
             return \`
             <a href="/product/\${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden">
               <div class="aspect-video overflow-hidden">
-                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}" 
+                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
                      alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
               </div>
               <div class="p-6">
@@ -1425,8 +1424,7 @@ app.get('/', async (c) => {
                 <h3 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600">\${p.name}</h3>
                 <p class="text-neutral-600 text-sm mb-4">\${p.short_description || ''}</p>
                 <div class="flex flex-col">
-                  <span class="text-2xl font-bold text-primary-600">\${priceWithVAT ? priceWithVAT.toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
-                  <span class="text-xs text-neutral-400 mt-1">с НДС 22%</span>
+                  <span class="text-2xl font-bold text-primary-600">\${p.price ? Math.round(p.price).toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
                 </div>
               </div>
             </a>
@@ -1668,11 +1666,10 @@ app.get('/katalog/:slug', async (c) => {
             return;
           }
           grid.innerHTML = data.data.map(p => {
-            const priceWithVAT = p.price ? Math.round(p.price * 1.22) : null;
             return \`
             <a href="/product/\${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden border border-neutral-100">
               <div class="aspect-video overflow-hidden">
-                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}" 
+                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
                      alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
               </div>
               <div class="p-5">
@@ -1680,8 +1677,7 @@ app.get('/katalog/:slug', async (c) => {
                 <h3 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600">\${p.name}</h3>
                 <p class="text-neutral-600 text-sm mb-4 line-clamp-2">\${p.short_description || ''}</p>
                 <div class="flex flex-col">
-                  <span class="text-xl font-bold text-primary-600">\${priceWithVAT ? priceWithVAT.toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
-                  <span class="text-xs text-neutral-400 mt-1">с НДС 22%</span>
+                  <span class="text-xl font-bold text-primary-600">\${p.price ? Math.round(p.price).toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
                 </div>
               </div>
             </a>
@@ -1794,9 +1790,8 @@ app.get('/product/:slug', async (c) => {
           specs = product.specifications ? (typeof product.specifications === 'string' ? JSON.parse(product.specifications) : product.specifications) : {};
         } catch(e) { specs = {}; }
         
-        // Calculate price with VAT 22%
-        const priceWithVAT = product.price ? Math.round(product.price * 1.22) : null;
-        const oldPriceWithVAT = product.old_price ? Math.round(product.old_price * 1.22) : null;
+        const priceWithVAT = product.price ? Math.round(product.price) : null;
+        const oldPriceWithVAT = product.old_price ? Math.round(product.old_price) : null;
         
         // Build specifications HTML
         const specKeys = ['Общая длина', 'Грузоподъемность', 'Длина площадки', 'Длина подъема', 'Высота подъема', 'Рабочая ширина рампы', 'Транспортировочные колеса', 'Подъемное устройство'];
@@ -1865,7 +1860,7 @@ app.get('/product/:slug', async (c) => {
                     \${oldPriceWithVAT ? \`<span class="text-xl text-neutral-400 line-through">\${oldPriceWithVAT.toLocaleString('ru-RU')} ₽</span>\` : ''}
                   \` : '<span class="text-2xl font-bold text-primary-600">Цена по запросу</span>'}
                 </div>
-                <p class="text-sm text-neutral-500">Цена указана с НДС 22%</p>
+                <p class="text-sm text-neutral-500">Цена указана без НДС</p>
                 
                 <div class="flex items-center gap-3 mt-4">
                   \${product.in_stock 
