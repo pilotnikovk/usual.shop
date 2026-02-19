@@ -108,64 +108,34 @@ app.get('/health', (c) => {
 // ==========================================
 
 // Auto-generated sitemap.xml
-app.get('/sitemap.xml', async (c) => {
-  const settings = c.get('settings')
-  const baseUrl = settings.site_url || 'https://ussil.ru'
-  
-  // Get all products
-  let products: any[] = []
-  try {
-    products = await sql`SELECT slug, updated_at FROM products WHERE is_active = 1`
-  } catch (e) {}
-  
-  // Get all categories
-  let categories: any[] = []
-  try {
-    categories = await sql`SELECT slug, updated_at FROM categories WHERE is_active = 1`
-  } catch (e) {}
-  
-  // Get all pages
-  let pages: any[] = []
-  try {
-    pages = await sql`SELECT slug, updated_at FROM pages WHERE is_active = 1`
-  } catch (e) {}
-  
-  const today = new Date().toISOString().split('T')[0]
-  
-  const staticPages = [
-    { url: '/', priority: '1.0', changefreq: 'daily' },
-    { url: '/katalog', priority: '0.9', changefreq: 'daily' },
-    { url: '/kejsy', priority: '0.8', changefreq: 'weekly' },
-    { url: '/o-kompanii', priority: '0.7', changefreq: 'monthly' },
-    { url: '/dostavka', priority: '0.7', changefreq: 'monthly' },
-    { url: '/kontakty', priority: '0.7', changefreq: 'monthly' }
-  ]
-  
-  let xml = `<?xml version="1.0" encoding="UTF-8"?>
+app.get('/sitemap.xml', (c) => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${staticPages.map(p => `  <url>
-    <loc>${baseUrl}${p.url}</loc>
-    <lastmod>${today}</lastmod>
-    <changefreq>${p.changefreq}</changefreq>
-    <priority>${p.priority}</priority>
-  </url>`).join('\n')}
-${categories.map((cat: any) => `  <url>
-    <loc>${baseUrl}/katalog?category=${cat.slug}</loc>
-    <lastmod>${cat.updated_at ? cat.updated_at.split('T')[0] : today}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>`).join('\n')}
-${products.map((prod: any) => `  <url>
-    <loc>${baseUrl}/product/${prod.slug}</loc>
-    <lastmod>${prod.updated_at ? prod.updated_at.split('T')[0] : today}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>`).join('\n')}
+  <url><loc>https://ussil.ru/</loc><lastmod>2026-02-19</lastmod><priority>1.00</priority></url>
+  <url><loc>https://ussil.ru/katalog</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/o-kompanii</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/kejsy</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/dostavka</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/kontakty</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/katalog/mobilnye-rampy</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/katalog/gidravlicheskie-rampy</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  <url><loc>https://ussil.ru/katalog/estakady</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
 </urlset>`
-
   return c.text(xml, 200, { 'Content-Type': 'application/xml' })
 })
 
+// Robots.txt
+app.get('/robots.txt', (c) => {
+  const settings = c.get('settings')
+  const baseUrl = settings.site_url || 'https://ussil.ru'
+  
+  return c.text(`User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/admin
+
+Sitemap: ${baseUrl}/sitemap.xml`, 200, { 'Content-Type': 'text/plain' })
+})
 // Robots.txt
 app.get('/robots.txt', (c) => {
   const settings = c.get('settings')
