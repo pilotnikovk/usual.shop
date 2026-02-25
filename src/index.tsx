@@ -5,7 +5,7 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import sql from './db'
 
-// Types
+// Type
 type Variables = {
   settings: Record<string, string>
   admin: { id: number; username: string } | null
