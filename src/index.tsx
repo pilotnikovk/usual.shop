@@ -167,8 +167,17 @@ app.get('/api/categories', async (c) => {
 app.get('/api/products', async (c) => {
   try {
     const categorySlug = c.req.query('category')
+    const featured = c.req.query('featured')
     let data
-    if (categorySlug) {
+    if (featured === '1') {
+      data = await sql`
+        SELECT p.*, c.name as category_name, c.slug as category_slug
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.is_active = 1 AND p.featured_order IS NOT NULL
+        ORDER BY p.featured_order ASC
+      `
+    } else if (categorySlug) {
       data = await sql`
         SELECT p.*, c.name as category_name, c.slug as category_slug
         FROM products p
@@ -286,7 +295,7 @@ const sendTelegramNotification = async (lead: any) => {
   }
 
   try {
-    const message = `🔔 *Новая заявка с сайта USSIL*
+    const message = `🔔 *Новая заявка с сайта YUSSIL*
 
 👤 *Имя:* ${lead.name}
 📞 *Телефон:* ${lead.phone}${lead.email ? `\n📧 *Email:* ${lead.email}` : ''}${lead.company ? `\n🏢 *Компания:* ${lead.company}` : ''}${lead.message ? `\n💬 *Сообщение:* ${lead.message}` : ''}${lead.source ? `\n📍 *Источник:* ${lead.source}` : ''}
@@ -334,12 +343,12 @@ const sendEmailNotification = async (lead: any) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: 'USSIL <onboarding@resend.dev>',
+        from: 'YUSSIL <onboarding@resend.dev>',
         to: [ADMIN_EMAIL],
         subject: `Новая заявка от ${lead.name}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #1e40af;">Новая заявка с сайта USSIL</h2>
+            <h2 style="color: #1e40af;">Новая заявка с сайта YUSSIL</h2>
             <table style="width: 100%; border-collapse: collapse;">
               <tr><td style="padding: 10px; border-bottom: 1px solid #e5e7eb;"><strong>Имя:</strong></td><td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${lead.name}</td></tr>
               <tr><td style="padding: 10px; border-bottom: 1px solid #e5e7eb;"><strong>Телефон:</strong></td><td style="padding: 10px; border-bottom: 1px solid #e5e7eb;"><a href="tel:${lead.phone}">${lead.phone}</a></td></tr>
@@ -625,6 +634,26 @@ app.put('/api/admin/settings', async (c) => {
   }
 })
 
+// Featured products batch update
+app.post('/api/admin/products/featured-batch', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { items } = body as { items: { id: number }[] }
+
+    // Reset all featured_order to NULL
+    await sql`UPDATE products SET featured_order = NULL`
+
+    // Set new order
+    for (let i = 0; i < items.length; i++) {
+      await sql`UPDATE products SET featured_order = ${i + 1} WHERE id = ${items[i].id}`
+    }
+
+    return c.json({ success: true })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message || 'Failed to update featured products' }, 500)
+  }
+})
+
 // Admin Categories CRUD
 app.get('/api/admin/categories', async (c) => {
   try {
@@ -875,7 +904,7 @@ app.use('/uploads/*', serveStatic({ root: './public' }))
 // ==========================================
 
 const renderPage = (title: string, content: string, seoTitle?: string, seoDescription?: string, settings?: Record<string, string>) => {
-  const siteName = settings?.site_name || 'USSIL'
+  const siteName = settings?.site_name || 'YUSSIL'
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -936,7 +965,7 @@ const renderPage = (title: string, content: string, seoTitle?: string, seoDescri
 // Main page
 app.get('/', async (c) => {
   const settings = c.get('settings')
-  const siteName = settings.site_name || 'USSIL'
+  const siteName = settings.site_name || 'YUSSIL'
   const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
   const heroBgImage = settings.hero_bg_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=1920&h=1080&fit=crop'
   
@@ -990,10 +1019,6 @@ app.get('/', async (c) => {
         </div>
         
         <div class="flex items-center gap-2 lg:gap-4">
-          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
-            <i class="far fa-heart text-neutral-500"></i>
-            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
-          </a>
           <a href="https://wa.me/${(settings.phone_whatsapp || '89209160100').replace(/[^0-9]/g, '')}" target="_blank" class="hidden md:flex w-12 h-12 rounded-xl bg-green-500 hover:bg-green-600 items-center justify-center transition-colors" title="Написать в WhatsApp">
             <i class="fab fa-whatsapp text-white text-xl"></i>
           </a>
@@ -1025,10 +1050,6 @@ app.get('/', async (c) => {
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
-          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
-            <i class="far fa-heart text-red-400"></i> Избранное
-            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
-          </a>
           <a href="#contact-form" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
             <i class="fas fa-paper-plane mr-2"></i>Оставить заявку
           </a>
@@ -1501,8 +1522,8 @@ app.get('/katalog', async (c) => {
     <div class="max-w-7xl mx-auto">
       <nav class="flex items-center justify-between px-6 py-4">
         <a href="/" class="flex items-center gap-3">
-          <img src="${logoUrl}" alt="USSIL" class="h-8 w-auto">
-          <span class="text-lg font-bold text-neutral-800">USSIL</span>
+          <img src="${logoUrl}" alt="YUSSIL" class="h-8 w-auto">
+          <span class="text-lg font-bold text-neutral-800">YUSSIL</span>
         </a>
         <div class="hidden lg:flex items-center gap-1">
           <a href="/katalog" class="px-4 py-2 rounded-lg text-primary-600 bg-primary-50 font-medium">Каталог</a>
@@ -1512,10 +1533,6 @@ app.get('/katalog', async (c) => {
           <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
         </div>
         <div class="flex items-center gap-4">
-          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
-            <i class="far fa-heart text-neutral-500"></i>
-            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
-          </a>
           <a href="tel:${(settings.phone_main || '84923225431').replace(/[^+\\d]/g, '')}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold">
             <i class="fas fa-phone"></i> ${settings.phone_main || '8 (49232) 2-54-31'}
           </a>
@@ -1532,10 +1549,6 @@ app.get('/katalog', async (c) => {
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
-          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
-            <i class="far fa-heart text-red-400"></i> Избранное
-            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
-          </a>
         </div>
       </div>
     </div>
@@ -1575,7 +1588,7 @@ app.get('/katalog', async (c) => {
 
   <footer class="bg-neutral-800 text-white py-8 mt-12">
     <div class="max-w-7xl mx-auto px-6 text-center text-neutral-400 text-sm">
-      &copy; ${new Date().getFullYear()} USSIL. Все права защищены.
+      &copy; ${new Date().getFullYear()} YUSSIL. Все права защищены.
     </div>
   </footer>
   
@@ -1592,7 +1605,7 @@ app.get('/katalog', async (c) => {
   </script>
   `
   
-  return c.html(renderPage('Каталог продукции', content, 'Каталог рамп и эстакад | USSIL', 
+  return c.html(renderPage('Каталог продукции', content, 'Каталог рамп и эстакад | YUSSIL', 
     'Каталог погрузочных рамп и эстакад от производителя. Мобильные, гидравлические рампы, эстакады. Цены, характеристики.', settings))
 })
 
@@ -1654,35 +1667,21 @@ app.get('/katalog/:slug', async (c) => {
             return;
           }
           grid.innerHTML = data.data.map(p => {
-            const safeName = (p.name || '').replace(/"/g, '&quot;');
-            const safeImage = (p.main_image || '').replace(/"/g, '&quot;');
             return \`
-            <div class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden border border-neutral-100">
-              <a href="/product/\${p.slug}" class="relative block">
-                <div class="aspect-video overflow-hidden bg-neutral-100">
-                  <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
-                       alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
-                </div>
-                <button
-                  data-fav-slug="\${p.slug}"
-                  data-fav-name="\${safeName}"
-                  data-fav-price="\${p.price || 0}"
-                  data-fav-image="\${safeImage}"
-                  onclick="event.preventDefault(); event.stopPropagation(); if(window.handleFavClick) window.handleFavClick(this)"
-                  class="fav-card-btn absolute top-3 right-3 z-20 w-9 h-9 rounded-xl bg-white/90 shadow-md flex items-center justify-center transition-all hover:scale-110 group/btn"
-                  title="Добавить в избранное">
-                  <i class="far fa-heart text-neutral-400 group-hover/btn:text-red-400"></i>
-                </button>
-              </a>
-              <a href="/product/\${p.slug}" class="block p-5">
+            <a href="/product/\${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden border border-neutral-100">
+              <div class="aspect-video overflow-hidden">
+                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
+                     alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+              </div>
+              <div class="p-5">
                 \${p.is_hit ? '<span class="inline-block px-3 py-1 bg-accent-100 text-accent-700 text-xs font-semibold rounded-full mb-3">Хит продаж</span>' : ''}
                 <h3 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600">\${p.name}</h3>
                 <p class="text-neutral-600 text-sm mb-4 line-clamp-2">\${p.short_description || ''}</p>
                 <div class="flex flex-col">
                   <span class="text-xl font-bold text-primary-600">\${p.price ? Math.round(p.price).toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
                 </div>
-              </a>
-            </div>
+              </div>
+            </a>
           \`}).join('');
         }
       } catch(e) { 
@@ -1695,7 +1694,7 @@ app.get('/katalog/:slug', async (c) => {
   </script>
   `
   
-  return c.html(renderPage(category.name, content, `${category.seo_title || category.name + ' | USSIL'}`, 
+  return c.html(renderPage(category.name, content, `${category.seo_title || category.name + ' | YUSSIL'}`, 
     category.seo_description || `${category.name} от производителя. Цены, характеристики, доставка по России.`, settings))
 })
 
@@ -1712,8 +1711,8 @@ app.get('/product/:slug', async (c) => {
     <div class="max-w-7xl mx-auto">
       <nav class="flex items-center justify-between px-4 sm:px-6 py-4">
         <a href="/" class="flex items-center gap-2 sm:gap-3">
-          <img src="${logoUrl}" alt="USSIL" class="h-8 w-auto">
-          <span class="text-lg font-bold text-neutral-800">USSIL</span>
+          <img src="${logoUrl}" alt="YUSSIL" class="h-8 w-auto">
+          <span class="text-lg font-bold text-neutral-800">YUSSIL</span>
         </a>
         <div class="hidden lg:flex items-center gap-1">
           <a href="/katalog" class="px-4 py-2 rounded-lg text-primary-600 bg-primary-50 font-medium">Каталог</a>
@@ -1723,10 +1722,6 @@ app.get('/product/:slug', async (c) => {
           <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
         </div>
         <div class="flex items-center gap-2 sm:gap-4">
-          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
-            <i class="far fa-heart text-neutral-500"></i>
-            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
-          </a>
           <a href="tel:${phoneClean}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold text-sm">
             <i class="fas fa-phone"></i> ${phoneMain}
           </a>
@@ -1743,10 +1738,6 @@ app.get('/product/:slug', async (c) => {
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
-          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
-            <i class="far fa-heart text-red-400"></i> Избранное
-            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
-          </a>
           <a href="tel:${phoneClean}" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
             <i class="fas fa-phone mr-2"></i>Позвонить
           </a>
@@ -1768,7 +1759,7 @@ app.get('/product/:slug', async (c) => {
 
   <footer class="bg-neutral-800 text-white py-8 mt-12">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 text-center text-neutral-400 text-sm">
-      &copy; ${new Date().getFullYear()} USSIL. Все права защищены.
+      &copy; ${new Date().getFullYear()} YUSSIL. Все права защищены.
     </div>
   </footer>
   
@@ -1887,16 +1878,6 @@ app.get('/product/:slug', async (c) => {
                     <i class="fab fa-whatsapp mr-2"></i> WhatsApp
                   </a>
                 </div>
-                <button
-                  id="fav-product-btn"
-                  data-fav-slug="\${product.slug}"
-                  data-fav-name="\${(product.name || '').replace(/"/g, '&quot;')}"
-                  data-fav-price="\${product.price || 0}"
-                  data-fav-image="\${mainImage}"
-                  onclick="if(window.handleFavClick) window.handleFavClick(this)"
-                  class="w-full mt-3 px-6 py-3 border-2 border-neutral-200 hover:border-red-300 hover:bg-red-50 text-neutral-600 hover:text-red-500 font-semibold rounded-xl transition-all flex items-center justify-center gap-2">
-                  <i class="far fa-heart"></i> В избранное
-                </button>
               </div>
               
               \${specsHtml ? \`
@@ -1950,16 +1931,7 @@ app.get('/product/:slug', async (c) => {
         \`;
         
         // Update page title
-        document.title = product.name + ' | USSIL';
-
-        // Initialize favorites button state
-        const favBtn = document.getElementById('fav-product-btn');
-        if (favBtn && window.isFavorite && window.isFavorite(product.slug)) {
-          favBtn.querySelector('i').className = 'fas fa-heart text-red-500';
-          favBtn.classList.add('border-red-300', 'bg-red-50', 'text-red-500');
-          favBtn.classList.remove('border-neutral-200', 'text-neutral-600');
-          favBtn.innerHTML = favBtn.innerHTML.replace('В избранное', 'В избранном');
-        }
+        document.title = product.name + ' | YUSSIL';
 
         // Handle form submission
         document.getElementById('product-lead-form').addEventListener('submit', async (e) => {
@@ -2026,17 +1998,13 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
     <div class="max-w-7xl mx-auto">
       <nav class="flex items-center justify-between px-4 sm:px-6 py-4">
         <a href="/" class="flex items-center gap-2 sm:gap-3">
-          <img src="${logoUrl}" alt="USSIL" class="h-8 w-auto">
-          <span class="text-lg font-bold text-neutral-800">USSIL</span>
+          <img src="${logoUrl}" alt="YUSSIL" class="h-8 w-auto">
+          <span class="text-lg font-bold text-neutral-800">YUSSIL</span>
         </a>
         <div class="hidden lg:flex items-center gap-1">
           ${pages.map(p => `<a href="${p.href}" class="px-4 py-2 rounded-lg ${activePage === p.href ? 'text-primary-600 bg-primary-50' : 'text-neutral-600 hover:text-primary-600 hover:bg-primary-50'} transition-all font-medium">${p.name}</a>`).join('')}
         </div>
         <div class="flex items-center gap-2 sm:gap-4">
-          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
-            <i class="far fa-heart text-neutral-500"></i>
-            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
-          </a>
           <a href="tel:${phoneClean}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold text-sm">
             <i class="fas fa-phone"></i> ${phoneMain}
           </a>
@@ -2049,10 +2017,6 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
       <div id="mobileMenu" class="hidden lg:hidden border-t border-neutral-100 bg-white">
         <div class="px-4 sm:px-6 py-4 space-y-2">
           ${pages.map(p => `<a href="${p.href}" class="block px-4 py-3 rounded-lg ${activePage === p.href ? 'bg-primary-50 text-primary-600' : 'text-neutral-600 hover:bg-neutral-50'} font-medium">${p.name}</a>`).join('')}
-          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
-            <i class="far fa-heart text-red-400"></i> Избранное
-            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
-          </a>
           <a href="tel:${phoneClean}" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
             <i class="fas fa-phone mr-2"></i>Позвонить
           </a>
@@ -2065,7 +2029,7 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
 const getInnerPageFooter = () => `
   <footer class="bg-neutral-800 text-white py-8 mt-12">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 text-center text-neutral-400 text-sm">
-      &copy; ${new Date().getFullYear()} USSIL. Все права защищены.
+      &copy; ${new Date().getFullYear()} YUSSIL. Все права защищены.
     </div>
   </footer>
   
@@ -2084,11 +2048,11 @@ app.get('/o-kompanii', async (c) => {
 
   <main class="py-8 lg:py-12">
     <div class="max-w-4xl mx-auto px-4 sm:px-6">
-      <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-6 lg:mb-8">О компании USSIL</h1>
+      <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-6 lg:mb-8">О компании YUSSIL</h1>
       
       <div class="prose prose-lg max-w-none">
         <p class="text-neutral-600 text-base lg:text-lg leading-relaxed mb-6">
-          Компания USSIL — один из ведущих российских производителей погрузочного оборудования. 
+          Компания YUSSIL — один из ведущих российских производителей погрузочного оборудования. 
           С 2010 года мы разрабатываем и изготавливаем погрузочные рампы и эстакады для складов, 
           логистических центров и производственных предприятий.
         </p>
@@ -2123,8 +2087,8 @@ app.get('/o-kompanii', async (c) => {
   ${getInnerPageFooter()}
   `
   
-  return c.html(renderPage('О компании', content, 'О компании USSIL — производитель рамп и эстакад', 
-    'USSIL — российский производитель погрузочных рамп и эстакад с 2010 года. Собственное производство, гарантия качества.', settings))
+  return c.html(renderPage('О компании', content, 'О компании YUSSIL — производитель рамп и эстакад', 
+    'YUSSIL — российский производитель погрузочных рамп и эстакад с 2010 года. Собственное производство, гарантия качества.', settings))
 })
 
 app.get('/kontakty', async (c) => {
@@ -2206,8 +2170,8 @@ app.get('/kontakty', async (c) => {
   ${getInnerPageFooter()}
   `
   
-  return c.html(renderPage('Контакты', content, 'Контакты | USSIL', 
-    'Контакты компании USSIL. Телефон, email, адрес производства.', settings))
+  return c.html(renderPage('Контакты', content, 'Контакты | YUSSIL', 
+    'Контакты компании YUSSIL. Телефон, email, адрес производства.', settings))
 })
 
 app.get('/dostavka', async (c) => {
@@ -2248,7 +2212,7 @@ app.get('/dostavka', async (c) => {
   ${getInnerPageFooter()}
   `
   
-  return c.html(renderPage('Доставка и оплата', content, 'Доставка и оплата | USSIL', 
+  return c.html(renderPage('Доставка и оплата', content, 'Доставка и оплата | YUSSIL', 
     'Условия доставки погрузочных рамп и эстакад по России. Оплата с НДС.', settings))
 })
 
@@ -2313,35 +2277,8 @@ app.get('/kejsy', async (c) => {
   ${getInnerPageFooter()}
   `
   
-  return c.html(renderPage('Кейсы', content, 'Наши кейсы | USSIL', 
-    'Реализованные проекты компании USSIL. Кейсы установки погрузочных рамп и эстакад для крупных компаний России.', settings))
-})
-
-// Favorites page
-app.get('/izbrannoe', async (c) => {
-  const settings = c.get('settings')
-  const content = `
-  ${getInnerPageHeader(settings, '/izbrannoe')}
-
-  <main class="py-8 lg:py-12">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6">
-      <div class="mb-6 lg:mb-8">
-        <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-2">
-          <i class="fas fa-heart text-red-500 mr-3"></i>Избранное
-        </h1>
-        <p class="text-neutral-600">Товары, которые вы сохранили</p>
-      </div>
-      <div id="favorites-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-        <!-- Заполняется из localStorage через JS -->
-      </div>
-    </div>
-  </main>
-
-  ${getInnerPageFooter()}
-  `
-
-  return c.html(renderPage('Избранное', content, 'Избранное | USSIL',
-    'Ваши избранные товары USSIL. Погрузочные рампы и эстакады.', settings))
+  return c.html(renderPage('Кейсы', content, 'Наши кейсы | YUSSIL', 
+    'Реализованные проекты компании YUSSIL. Кейсы установки погрузочных рамп и эстакад для крупных компаний России.', settings))
 })
 
 // Admin login page
@@ -2363,7 +2300,7 @@ app.get('/admin/login', async (c) => {
       <div class="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center mb-4 shadow-lg">
         <span class="text-3xl font-bold text-white">U</span>
       </div>
-      <h1 class="text-2xl font-bold text-neutral-800">USSIL</h1>
+      <h1 class="text-2xl font-bold text-neutral-800">YUSSIL</h1>
       <p class="text-neutral-500">Вход в админ-панель</p>
     </div>
     
@@ -2470,7 +2407,7 @@ app.get('/admin', async (c) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Админ-панель | USSIL CMS</title>
+  <title>Админ-панель | YUSSIL CMS</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -2494,7 +2431,7 @@ app.get('/admin', async (c) => {
     <!-- Sidebar -->
     <aside class="w-64 bg-white border-r border-neutral-200 flex flex-col fixed h-full">
       <div class="p-6 border-b border-neutral-100">
-        <h1 class="text-xl font-bold text-neutral-800">USSIL</h1>
+        <h1 class="text-xl font-bold text-neutral-800">YUSSIL</h1>
         <p class="text-neutral-500 text-sm">Система управления</p>
       </div>
       <nav class="p-4 space-y-1 flex-1 overflow-y-auto">
@@ -2503,6 +2440,9 @@ app.get('/admin', async (c) => {
         </a>
         <a href="#products" onclick="showSection('products')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
           <i class="fas fa-boxes w-5"></i> Товары
+        </a>
+        <a href="#popular" onclick="showSection('popular')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
+          <i class="fas fa-fire w-5 text-orange-500"></i> Популярные
         </a>
         <a href="#categories" onclick="showSection('categories')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
           <i class="fas fa-folder w-5"></i> Категории
@@ -2607,6 +2547,52 @@ app.get('/admin', async (c) => {
             </thead>
             <tbody id="products-table" class="divide-y divide-neutral-100"></tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- Popular Products Section -->
+      <section id="section-popular" class="admin-section hidden">
+        <div class="flex justify-between items-center mb-6">
+          <div>
+            <h2 class="text-2xl font-bold text-neutral-800">Популярные товары</h2>
+            <p class="text-neutral-500 text-sm mt-1">Управляйте списком товаров на главной странице. Перетащите или используйте стрелки для изменения порядка.</p>
+          </div>
+          <button onclick="savePopular()" class="px-6 py-3 bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-xl transition-colors flex items-center gap-2">
+            <i class="fas fa-save"></i> Сохранить порядок
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <!-- Current featured list -->
+          <div class="bg-white rounded-2xl shadow-sm border border-neutral-100 p-6">
+            <h3 class="font-semibold text-neutral-800 mb-1 flex items-center gap-2">
+              <i class="fas fa-fire text-orange-500"></i> Сейчас на главной
+            </h3>
+            <p class="text-xs text-neutral-400 mb-4">Товары отображаются в этом порядке</p>
+            <div id="popular-list" class="space-y-2 min-h-[100px]">
+              <div class="text-center py-8 text-neutral-400 text-sm" id="popular-empty">
+                <i class="fas fa-inbox text-3xl mb-2 block"></i>
+                Нет популярных товаров. Добавьте из списка справа.
+              </div>
+            </div>
+          </div>
+
+          <!-- All products (to add) -->
+          <div class="bg-white rounded-2xl shadow-sm border border-neutral-100 p-6">
+            <h3 class="font-semibold text-neutral-800 mb-1 flex items-center gap-2">
+              <i class="fas fa-boxes text-blue-500"></i> Все товары
+            </h3>
+            <p class="text-xs text-neutral-400 mb-3">Нажмите «+», чтобы добавить в популярные</p>
+            <input type="text" id="popular-search" oninput="filterPopularSearch(this.value)"
+              placeholder="Поиск товара..."
+              class="w-full px-4 py-2 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 text-sm mb-4">
+            <div id="all-products-list" class="space-y-1 max-h-[480px] overflow-y-auto">
+              <div class="text-center py-8 text-neutral-400 text-sm">
+                <i class="fas fa-spinner fa-spin text-2xl mb-2 block"></i>
+                Загрузка...
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -2919,7 +2905,7 @@ app.get('/admin', async (c) => {
             <div class="space-y-6">
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Заголовок страницы</label>
-                <input type="text" name="about_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="О компании USSIL">
+                <input type="text" name="about_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="О компании YUSSIL">
               </div>
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Основной текст</label>
@@ -2978,7 +2964,7 @@ app.get('/admin', async (c) => {
             <div class="space-y-6">
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Meta Title (главная)</label>
-                <input type="text" name="seo_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Погрузочные рампы и эстакады от производителя | USSIL">
+                <input type="text" name="seo_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Погрузочные рампы и эстакады от производителя | YUSSIL">
               </div>
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Meta Description (главная)</label>
@@ -3020,7 +3006,7 @@ app.get('/admin', async (c) => {
               </div>
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Тема письма</label>
-                <input type="text" name="email_subject_template" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Новая заявка с сайта USSIL">
+                <input type="text" name="email_subject_template" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Новая заявка с сайта YUSSIL">
               </div>
             </div>
             
@@ -3381,6 +3367,7 @@ app.get('/admin', async (c) => {
       event.target.closest('a').classList.remove('text-neutral-600');
       
       if (section === 'categories') loadCategories();
+      if (section === 'popular') loadPopularSection();
     }
 
     function showSettingsTab(tab) {
@@ -3461,6 +3448,138 @@ app.get('/admin', async (c) => {
             '<button onclick="deleteCategory(' + cat.id + ')" class="w-9 h-9 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"><i class="fas fa-trash"></i></button>' +
           '</div></td></tr>'
       ).join('') || '<tr><td colspan="5" class="px-6 py-8 text-center text-neutral-500">Категорий нет</td></tr>';
+    }
+
+    // ==========================================
+    // POPULAR PRODUCTS
+    // ==========================================
+    let allAdminProducts = [];
+    let popularItems = []; // [{id, name, main_image}] in display order
+
+    async function loadPopularSection() {
+      const res = await fetch('/api/admin/products');
+      const data = await res.json();
+      allAdminProducts = data.data || [];
+
+      // Separate featured (sorted by featured_order) and non-featured
+      const featured = allAdminProducts
+        .filter(p => p.featured_order !== null && p.featured_order !== undefined)
+        .sort((a, b) => a.featured_order - b.featured_order);
+      popularItems = featured.map(p => ({ id: p.id, name: p.name, main_image: p.main_image }));
+
+      renderPopularList();
+      renderAllProductsList('');
+    }
+
+    function renderPopularList() {
+      const list = document.getElementById('popular-list');
+      const empty = document.getElementById('popular-empty');
+      if (popularItems.length === 0) {
+        list.innerHTML = '<div class="text-center py-8 text-neutral-400 text-sm" id="popular-empty"><i class="fas fa-inbox text-3xl mb-2 block"></i>Нет популярных товаров. Добавьте из списка справа.</div>';
+        return;
+      }
+      list.innerHTML = popularItems.map((p, i) => `
+        <div class="flex items-center gap-3 p-3 bg-neutral-50 rounded-xl border border-neutral-100" data-popular-id="${p.id}">
+          <div class="flex flex-col gap-1">
+            <button onclick="movePopularUp(${i})" ${i === 0 ? 'disabled' : ''} class="w-6 h-5 flex items-center justify-center rounded text-neutral-400 hover:text-neutral-700 hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+              <i class="fas fa-chevron-up text-xs"></i>
+            </button>
+            <button onclick="movePopularDown(${i})" ${i === popularItems.length - 1 ? 'disabled' : ''} class="w-6 h-5 flex items-center justify-center rounded text-neutral-400 hover:text-neutral-700 hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+              <i class="fas fa-chevron-down text-xs"></i>
+            </button>
+          </div>
+          <span class="w-7 h-7 bg-orange-100 text-orange-600 text-xs font-bold rounded-full flex items-center justify-center flex-shrink-0">${i + 1}</span>
+          <img src="${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=80&h=60&fit=crop'}"
+            class="w-12 h-10 object-cover rounded-lg flex-shrink-0" onerror="this.src='https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=80&h=60&fit=crop'">
+          <span class="flex-1 text-sm font-medium text-neutral-800 truncate">${p.name}</span>
+          <button onclick="removeFromPopular(${i})" class="w-7 h-7 flex items-center justify-center rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0">
+            <i class="fas fa-times text-xs"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function renderAllProductsList(query) {
+      const list = document.getElementById('all-products-list');
+      const popularIds = new Set(popularItems.map(p => p.id));
+      const available = allAdminProducts.filter(p =>
+        !popularIds.has(p.id) &&
+        (!query || p.name.toLowerCase().includes(query.toLowerCase()))
+      );
+      if (available.length === 0) {
+        list.innerHTML = '<div class="text-center py-6 text-neutral-400 text-sm">Товары не найдены</div>';
+        return;
+      }
+      list.innerHTML = available.map(p => `
+        <div class="flex items-center gap-3 p-2 hover:bg-neutral-50 rounded-lg" data-product-id="${p.id}" data-product-name="${(p.name || '').replace(/"/g, '&quot;')}" data-product-image="${p.main_image || ''}">
+          <img src="${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=60&h=45&fit=crop'}"
+            class="w-10 h-8 object-cover rounded flex-shrink-0" onerror="this.src='https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=60&h=45&fit=crop'">
+          <span class="flex-1 text-sm text-neutral-700 truncate">${p.name}</span>
+          <button onclick="addToPopular(this)" class="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors">
+            <i class="fas fa-plus text-xs"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function movePopularUp(index) {
+      if (index <= 0) return;
+      [popularItems[index - 1], popularItems[index]] = [popularItems[index], popularItems[index - 1]];
+      renderPopularList();
+    }
+
+    function movePopularDown(index) {
+      if (index >= popularItems.length - 1) return;
+      [popularItems[index], popularItems[index + 1]] = [popularItems[index + 1], popularItems[index]];
+      renderPopularList();
+    }
+
+    function removeFromPopular(index) {
+      popularItems.splice(index, 1);
+      renderPopularList();
+      renderAllProductsList(document.getElementById('popular-search').value);
+    }
+
+    function addToPopular(btn) {
+      const row = btn.closest('[data-product-id]');
+      const id = parseInt(row.dataset.productId);
+      const name = row.dataset.productName;
+      const image = row.dataset.productImage;
+      popularItems.push({ id, name, main_image: image });
+      renderPopularList();
+      renderAllProductsList(document.getElementById('popular-search').value);
+    }
+
+    function filterPopularSearch(query) {
+      renderAllProductsList(query);
+    }
+
+    async function savePopular() {
+      const token = localStorage.getItem('adminToken');
+      const items = popularItems.map(p => ({ id: p.id }));
+      try {
+        const res = await fetch('/api/admin/products/featured-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ items })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Порядок популярных товаров сохранён!', 'success');
+        } else {
+          showToast('Ошибка сохранения: ' + (data.error || ''), 'error');
+        }
+      } catch(e) {
+        showToast('Ошибка сети', 'error');
+      }
+    }
+
+    function showToast(message, type) {
+      const toast = document.createElement('div');
+      toast.className = 'fixed top-6 right-6 z-50 px-6 py-3 rounded-xl text-white font-medium shadow-lg ' + (type === 'success' ? 'bg-green-500' : 'bg-red-500');
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s'; setTimeout(() => toast.remove(), 300); }, 3000);
     }
 
     // Leads
@@ -4205,7 +4324,7 @@ app.get('/admin', async (c) => {
 
 const port = parseInt(process.env.PORT || '3000', 10)
 
-console.log('=== USSIL CMS v1.0.0 ===')
+console.log('=== YUSSIL CMS v1.0.0 ===')
 console.log('🚀 Starting server...')
 console.log('NODE_ENV:', process.env.NODE_ENV)
 console.log('PORT:', port)
