@@ -13,11 +13,142 @@ const showNotification = (message, type = 'success') => {
   toast.className = `toast toast-${type}`;
   toast.textContent = message;
   document.body.appendChild(toast);
-  
+
   setTimeout(() => {
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 300);
   }, 3000);
+};
+
+// ==========================================
+// FAVORITES - localStorage
+// ==========================================
+
+const getFavorites = () => {
+  try {
+    return JSON.parse(localStorage.getItem('ussil_favorites') || '[]');
+  } catch(e) {
+    return [];
+  }
+};
+
+const saveFavorites = (favs) => {
+  localStorage.setItem('ussil_favorites', JSON.stringify(favs));
+};
+
+const isFavorite = (slug) => {
+  return getFavorites().some(f => f.slug === slug);
+};
+
+window.isFavorite = isFavorite;
+
+const updateFavoriteCount = () => {
+  const count = getFavorites().length;
+  document.querySelectorAll('.fav-count-badge').forEach(el => {
+    el.textContent = count;
+    el.classList.toggle('hidden', count === 0);
+  });
+};
+
+const favBtnHtml = (slug, name, price, image) => {
+  const fav = isFavorite(slug);
+  const safeName = (name || '').replace(/"/g, '&quot;');
+  const safeImage = (image || '').replace(/"/g, '&quot;');
+  return `<button
+    data-fav-slug="${slug}"
+    data-fav-name="${safeName}"
+    data-fav-price="${price || 0}"
+    data-fav-image="${safeImage}"
+    onclick="event.stopPropagation(); window.handleFavClick(this)"
+    class="fav-card-btn absolute top-3 right-3 z-20 w-9 h-9 rounded-xl bg-white/90 shadow-md flex items-center justify-center transition-all hover:scale-110 group"
+    title="${fav ? 'Убрать из избранного' : 'Добавить в избранное'}">
+    <i class="${fav ? 'fas fa-heart text-red-500' : 'far fa-heart text-neutral-400 group-hover:text-red-400'}"></i>
+  </button>`;
+};
+
+window.handleFavClick = (btn) => {
+  const slug = btn.dataset.favSlug;
+  const name = btn.dataset.favName;
+  const price = parseFloat(btn.dataset.favPrice || '0');
+  const image = btn.dataset.favImage || '';
+  window.toggleFavorite(slug, name, price, image, btn);
+};
+
+window.toggleFavorite = (slug, name, price, image, btn) => {
+  let favs = getFavorites();
+  const idx = favs.findIndex(f => f.slug === slug);
+  if (idx === -1) {
+    favs.push({ slug, name, price, image });
+    saveFavorites(favs);
+    showNotification('Добавлено в избранное', 'success');
+    if (btn) {
+      btn.querySelector('i').className = 'fas fa-heart text-red-500';
+      btn.title = 'Убрать из избранного';
+    }
+  } else {
+    favs.splice(idx, 1);
+    saveFavorites(favs);
+    showNotification('Удалено из избранного', 'success');
+    if (btn) {
+      btn.querySelector('i').className = 'far fa-heart text-neutral-400 group-hover:text-red-400';
+      btn.title = 'Добавить в избранное';
+      // Если на странице избранного — убрать карточку
+      if (document.getElementById('favorites-grid')) {
+        const card = btn.closest('[data-fav-card]');
+        if (card) {
+          card.remove();
+          if (!document.querySelector('#favorites-grid [data-fav-card]')) {
+            loadFavoritesPage();
+          }
+        }
+      }
+    }
+  }
+  updateFavoriteCount();
+};
+
+// Load Favorites Page
+const loadFavoritesPage = () => {
+  const grid = document.getElementById('favorites-grid');
+  if (!grid) return;
+
+  const favs = getFavorites();
+  if (favs.length === 0) {
+    grid.innerHTML = `
+      <div class="col-span-full text-center py-16">
+        <i class="far fa-heart text-6xl text-neutral-300 mb-6 block"></i>
+        <h2 class="text-xl font-semibold text-neutral-600 mb-2">Избранное пусто</h2>
+        <p class="text-neutral-400 mb-6">Добавляйте товары в избранное, нажав на сердечко на карточке</p>
+        <a href="/katalog" class="inline-flex items-center gap-2 px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl transition-colors">
+          <i class="fas fa-arrow-left"></i> Перейти в каталог
+        </a>
+      </div>
+    `;
+    return;
+  }
+
+  grid.innerHTML = favs.map(product => `
+    <div class="product-card bg-white rounded-2xl shadow-sm overflow-hidden" data-fav-card="${product.slug}">
+      <div class="relative aspect-[4/3] overflow-hidden bg-neutral-100">
+        ${favBtnHtml(product.slug, product.name, product.price, product.image)}
+        <img src="${product.image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
+             alt="${product.name}"
+             class="w-full h-full object-cover"
+             loading="lazy">
+      </div>
+      <div class="p-5">
+        <h3 class="text-lg font-semibold text-neutral-800 mb-2">
+          <a href="/product/${product.slug}" class="hover:text-primary-600 transition-colors">${product.name}</a>
+        </h3>
+        <div class="flex items-center justify-between pt-4 border-t border-neutral-100 mt-4">
+          <span class="text-xl font-bold text-primary-700">${formatPrice(product.price)}</span>
+          <a href="/product/${product.slug}" class="text-primary-600 hover:text-primary-700 font-medium text-sm">
+            Подробнее <i class="fas fa-arrow-right ml-1"></i>
+          </a>
+        </div>
+      </div>
+    </div>
+  `).join('');
 };
 
 // Load Categories
@@ -36,7 +167,7 @@ const loadCategories = async () => {
         'estakady': 'fa-road',
         'kontejnernye-rampy': 'fa-box'
       };
-      
+
       const colors = {
         'mobilnye-rampy': 'blue',
         'gidravlicheskie-rampy': 'purple',
@@ -48,7 +179,7 @@ const loadCategories = async () => {
         const icon = icons[cat.slug] || 'fa-cubes';
         const color = colors[cat.slug] || 'blue';
         return `
-        <a href="/katalog?category=${cat.slug}" 
+        <a href="/katalog?category=${cat.slug}"
            class="group p-8 bg-white rounded-2xl shadow-sm hover:shadow-lg transition-all border border-neutral-100 hover:border-${color}-200">
           <div class="w-14 h-14 rounded-xl bg-${color}-100 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
             <i class="fas ${icon} text-2xl text-${color}-600"></i>
@@ -79,14 +210,15 @@ const loadFeaturedProducts = async () => {
       container.innerHTML = data.data.slice(0, 6).map(product => `
         <div class="product-card bg-white rounded-2xl shadow-sm overflow-hidden">
           ${product.is_hit ? '<div class="absolute top-4 left-4 z-10"><span class="badge badge-hit"><i class="fas fa-fire mr-1"></i>Хит</span></div>' : ''}
-          
+
           <div class="relative aspect-[4/3] overflow-hidden bg-neutral-100">
-            <img src="${product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}" 
+            ${favBtnHtml(product.slug, product.name, product.price, product.main_image)}
+            <img src="${product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
                  alt="${product.name}"
                  class="w-full h-full object-cover"
                  loading="lazy">
           </div>
-          
+
           <div class="p-6">
             <div class="flex items-center gap-2 mb-3">
               <span class="text-xs font-medium text-primary-600 bg-primary-50 px-2 py-1 rounded-lg">
@@ -94,19 +226,19 @@ const loadFeaturedProducts = async () => {
               </span>
               ${product.in_stock ? '<span class="badge badge-stock text-xs">В наличии</span>' : ''}
             </div>
-            
+
             <h3 class="text-lg font-semibold text-neutral-800 mb-2 hover:text-primary-600 transition-colors">
               <a href="/product/${product.slug}">${product.name}</a>
             </h3>
-            
+
             <p class="text-neutral-500 text-sm mb-4 line-clamp-2">${product.short_description || ''}</p>
-            
+
             <div class="flex items-center justify-between pt-4 border-t border-neutral-100">
               <div>
                 <span class="price">${formatPrice(product.price)}</span>
                 <span class="block text-xs text-neutral-400">с НДС</span>
               </div>
-              <a href="/product/${product.slug}" 
+              <a href="/product/${product.slug}"
                  class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-xl transition-colors">
                 Подробнее
               </a>
@@ -131,14 +263,14 @@ const loadCatalogProducts = async () => {
     try {
       const catResponse = await fetch('/api/categories');
       const catData = await catResponse.json();
-      
+
       if (catData.success) {
         filterContainer.innerHTML = `
           <a href="/katalog" class="block px-4 py-2 rounded-lg ${!window.location.search ? 'bg-primary-50 text-primary-600 font-medium' : 'text-neutral-600 hover:bg-neutral-50'}">
             Все категории
           </a>
           ${catData.data.map(cat => `
-            <a href="/katalog?category=${cat.slug}" 
+            <a href="/katalog?category=${cat.slug}"
                class="block px-4 py-2 rounded-lg ${window.location.search.includes(cat.slug) ? 'bg-primary-50 text-primary-600 font-medium' : 'text-neutral-600 hover:bg-neutral-50'}">
               ${cat.name}
             </a>
@@ -154,7 +286,7 @@ const loadCatalogProducts = async () => {
   try {
     const params = new URLSearchParams(window.location.search);
     const category = params.get('category');
-    
+
     const url = category ? `/api/products?category=${category}` : '/api/products';
     const response = await fetch(url);
     const data = await response.json();
@@ -164,21 +296,22 @@ const loadCatalogProducts = async () => {
         <div class="product-card bg-white rounded-2xl shadow-sm overflow-hidden">
           <div class="relative aspect-[4/3] overflow-hidden bg-neutral-100">
             ${product.is_hit ? '<div class="absolute top-3 left-3 z-10"><span class="badge badge-hit text-xs"><i class="fas fa-fire mr-1"></i>Хит</span></div>' : ''}
-            <img src="${product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}" 
+            ${favBtnHtml(product.slug, product.name, product.price, product.main_image)}
+            <img src="${product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
                  alt="${product.name}"
                  class="w-full h-full object-cover"
                  loading="lazy">
           </div>
-          
+
           <div class="p-5">
             <span class="text-xs font-medium text-primary-600 bg-primary-50 px-2 py-1 rounded-lg">
               ${product.category_name || 'Рампы'}
             </span>
-            
+
             <h3 class="text-lg font-semibold text-neutral-800 mt-3 mb-2">
               <a href="/product/${product.slug}" class="hover:text-primary-600 transition-colors">${product.name}</a>
             </h3>
-            
+
             <div class="flex items-center justify-between pt-4 border-t border-neutral-100 mt-4">
               <span class="text-xl font-bold text-primary-700">${formatPrice(product.price)}</span>
               <a href="/product/${product.slug}" class="text-primary-600 hover:text-primary-700 font-medium text-sm">
@@ -229,34 +362,34 @@ const loadProductDetail = async () => {
           <span class="mx-2">/</span>
           <span class="text-neutral-800">${product.name}</span>
         </nav>
-        
+
         <div class="grid lg:grid-cols-2 gap-12">
           <div>
             <div class="aspect-[4/3] rounded-2xl overflow-hidden bg-neutral-100 mb-4">
-              <img src="${product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&h=600&fit=crop'}" 
+              <img src="${product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&h=600&fit=crop'}"
                    alt="${product.name}"
                    class="w-full h-full object-cover">
             </div>
           </div>
-          
+
           <div>
             <div class="flex items-center gap-3 mb-4">
               <span class="text-sm font-medium text-primary-600 bg-primary-50 px-3 py-1 rounded-lg">${product.category_name || 'Рампы'}</span>
               ${product.is_hit ? '<span class="badge badge-hit"><i class="fas fa-fire mr-1"></i>Хит продаж</span>' : ''}
               ${product.in_stock ? '<span class="badge badge-stock">В наличии</span>' : ''}
             </div>
-            
+
             <h1 class="text-3xl font-bold text-neutral-800 mb-4">${product.name}</h1>
-            
+
             <p class="text-neutral-600 mb-6">${product.short_description || ''}</p>
-            
+
             <div class="p-6 bg-neutral-50 rounded-2xl mb-6">
               <div class="flex items-baseline gap-2 mb-2">
                 <span class="text-4xl font-bold text-primary-700">${formatPrice(product.price)}</span>
               </div>
               <p class="text-neutral-500 text-sm">Цена с НДС 20%</p>
             </div>
-            
+
             <div class="space-y-4 mb-8">
               <a href="#contact-form" class="flex items-center justify-center gap-2 w-full py-4 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl transition-colors">
                 <i class="fas fa-paper-plane"></i>
@@ -267,7 +400,7 @@ const loadProductDetail = async () => {
                 Позвонить
               </a>
             </div>
-            
+
             ${Object.keys(specs).length > 0 ? `
               <div class="border-t border-neutral-200 pt-6">
                 <h3 class="text-lg font-semibold text-neutral-800 mb-4">Характеристики</h3>
@@ -308,7 +441,7 @@ const initContactForm = () => {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const submitBtn = form.querySelector('button[type="submit"]');
     const originalText = submitBtn.innerHTML;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Отправка...';
@@ -381,6 +514,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initContactForm();
   initHeaderScroll();
   initMobileMenu();
-  
+  updateFavoriteCount();
+  loadFavoritesPage();
+
   console.log('Armata-Rampa loaded');
 });

@@ -990,6 +990,10 @@ app.get('/', async (c) => {
         </div>
         
         <div class="flex items-center gap-2 lg:gap-4">
+          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
+            <i class="far fa-heart text-neutral-500"></i>
+            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
+          </a>
           <a href="https://wa.me/${(settings.phone_whatsapp || '89209160100').replace(/[^0-9]/g, '')}" target="_blank" class="hidden md:flex w-12 h-12 rounded-xl bg-green-500 hover:bg-green-600 items-center justify-center transition-colors" title="Написать в WhatsApp">
             <i class="fab fa-whatsapp text-white text-xl"></i>
           </a>
@@ -1021,6 +1025,10 @@ app.get('/', async (c) => {
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
+          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
+            <i class="far fa-heart text-red-400"></i> Избранное
+            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
+          </a>
           <a href="#contact-form" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
             <i class="fas fa-paper-plane mr-2"></i>Оставить заявку
           </a>
@@ -1504,6 +1512,10 @@ app.get('/katalog', async (c) => {
           <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
         </div>
         <div class="flex items-center gap-4">
+          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
+            <i class="far fa-heart text-neutral-500"></i>
+            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
+          </a>
           <a href="tel:${(settings.phone_main || '84923225431').replace(/[^+\\d]/g, '')}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold">
             <i class="fas fa-phone"></i> ${settings.phone_main || '8 (49232) 2-54-31'}
           </a>
@@ -1520,6 +1532,10 @@ app.get('/katalog', async (c) => {
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
+          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
+            <i class="far fa-heart text-red-400"></i> Избранное
+            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
+          </a>
         </div>
       </div>
     </div>
@@ -1638,21 +1654,35 @@ app.get('/katalog/:slug', async (c) => {
             return;
           }
           grid.innerHTML = data.data.map(p => {
+            const safeName = (p.name || '').replace(/"/g, '&quot;');
+            const safeImage = (p.main_image || '').replace(/"/g, '&quot;');
             return \`
-            <a href="/product/\${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden border border-neutral-100">
-              <div class="aspect-video overflow-hidden">
-                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
-                     alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
-              </div>
-              <div class="p-5">
+            <div class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden border border-neutral-100">
+              <a href="/product/\${p.slug}" class="relative block">
+                <div class="aspect-video overflow-hidden bg-neutral-100">
+                  <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
+                       alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+                </div>
+                <button
+                  data-fav-slug="\${p.slug}"
+                  data-fav-name="\${safeName}"
+                  data-fav-price="\${p.price || 0}"
+                  data-fav-image="\${safeImage}"
+                  onclick="event.preventDefault(); event.stopPropagation(); if(window.handleFavClick) window.handleFavClick(this)"
+                  class="fav-card-btn absolute top-3 right-3 z-20 w-9 h-9 rounded-xl bg-white/90 shadow-md flex items-center justify-center transition-all hover:scale-110 group/btn"
+                  title="Добавить в избранное">
+                  <i class="far fa-heart text-neutral-400 group-hover/btn:text-red-400"></i>
+                </button>
+              </a>
+              <a href="/product/\${p.slug}" class="block p-5">
                 \${p.is_hit ? '<span class="inline-block px-3 py-1 bg-accent-100 text-accent-700 text-xs font-semibold rounded-full mb-3">Хит продаж</span>' : ''}
                 <h3 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600">\${p.name}</h3>
                 <p class="text-neutral-600 text-sm mb-4 line-clamp-2">\${p.short_description || ''}</p>
                 <div class="flex flex-col">
                   <span class="text-xl font-bold text-primary-600">\${p.price ? Math.round(p.price).toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
                 </div>
-              </div>
-            </a>
+              </a>
+            </div>
           \`}).join('');
         }
       } catch(e) { 
@@ -1693,6 +1723,10 @@ app.get('/product/:slug', async (c) => {
           <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
         </div>
         <div class="flex items-center gap-2 sm:gap-4">
+          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
+            <i class="far fa-heart text-neutral-500"></i>
+            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
+          </a>
           <a href="tel:${phoneClean}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold text-sm">
             <i class="fas fa-phone"></i> ${phoneMain}
           </a>
@@ -1709,6 +1743,10 @@ app.get('/product/:slug', async (c) => {
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
+          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
+            <i class="far fa-heart text-red-400"></i> Избранное
+            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
+          </a>
           <a href="tel:${phoneClean}" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
             <i class="fas fa-phone mr-2"></i>Позвонить
           </a>
@@ -1844,11 +1882,21 @@ app.get('/product/:slug', async (c) => {
                   <a href="#contact-form" class="flex-1 px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl text-center transition-colors">
                     <i class="fas fa-phone-alt mr-2"></i> Заказать звонок
                   </a>
-                  <a href="https://wa.me/89209160100?text=\${encodeURIComponent('Здравствуйте! Интересует товар: ' + product.name)}" target="_blank" 
+                  <a href="https://wa.me/89209160100?text=\${encodeURIComponent('Здравствуйте! Интересует товар: ' + product.name)}" target="_blank"
                      class="flex-1 px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-xl text-center transition-colors">
                     <i class="fab fa-whatsapp mr-2"></i> WhatsApp
                   </a>
                 </div>
+                <button
+                  id="fav-product-btn"
+                  data-fav-slug="\${product.slug}"
+                  data-fav-name="\${(product.name || '').replace(/"/g, '&quot;')}"
+                  data-fav-price="\${product.price || 0}"
+                  data-fav-image="\${mainImage}"
+                  onclick="if(window.handleFavClick) window.handleFavClick(this)"
+                  class="w-full mt-3 px-6 py-3 border-2 border-neutral-200 hover:border-red-300 hover:bg-red-50 text-neutral-600 hover:text-red-500 font-semibold rounded-xl transition-all flex items-center justify-center gap-2">
+                  <i class="far fa-heart"></i> В избранное
+                </button>
               </div>
               
               \${specsHtml ? \`
@@ -1903,7 +1951,16 @@ app.get('/product/:slug', async (c) => {
         
         // Update page title
         document.title = product.name + ' | USSIL';
-        
+
+        // Initialize favorites button state
+        const favBtn = document.getElementById('fav-product-btn');
+        if (favBtn && window.isFavorite && window.isFavorite(product.slug)) {
+          favBtn.querySelector('i').className = 'fas fa-heart text-red-500';
+          favBtn.classList.add('border-red-300', 'bg-red-50', 'text-red-500');
+          favBtn.classList.remove('border-neutral-200', 'text-neutral-600');
+          favBtn.innerHTML = favBtn.innerHTML.replace('В избранное', 'В избранном');
+        }
+
         // Handle form submission
         document.getElementById('product-lead-form').addEventListener('submit', async (e) => {
           e.preventDefault();
@@ -1976,6 +2033,10 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
           ${pages.map(p => `<a href="${p.href}" class="px-4 py-2 rounded-lg ${activePage === p.href ? 'text-primary-600 bg-primary-50' : 'text-neutral-600 hover:text-primary-600 hover:bg-primary-50'} transition-all font-medium">${p.name}</a>`).join('')}
         </div>
         <div class="flex items-center gap-2 sm:gap-4">
+          <a href="/izbrannoe" class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-neutral-100 hover:bg-red-50 transition-colors" title="Избранное">
+            <i class="far fa-heart text-neutral-500"></i>
+            <span class="fav-count-badge hidden absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-bold leading-none">0</span>
+          </a>
           <a href="tel:${phoneClean}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold text-sm">
             <i class="fas fa-phone"></i> ${phoneMain}
           </a>
@@ -1988,6 +2049,10 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
       <div id="mobileMenu" class="hidden lg:hidden border-t border-neutral-100 bg-white">
         <div class="px-4 sm:px-6 py-4 space-y-2">
           ${pages.map(p => `<a href="${p.href}" class="block px-4 py-3 rounded-lg ${activePage === p.href ? 'bg-primary-50 text-primary-600' : 'text-neutral-600 hover:bg-neutral-50'} font-medium">${p.name}</a>`).join('')}
+          <a href="/izbrannoe" class="flex items-center gap-2 px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">
+            <i class="far fa-heart text-red-400"></i> Избранное
+            <span class="fav-count-badge hidden ml-auto bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">0</span>
+          </a>
           <a href="tel:${phoneClean}" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
             <i class="fas fa-phone mr-2"></i>Позвонить
           </a>
@@ -2250,6 +2315,33 @@ app.get('/kejsy', async (c) => {
   
   return c.html(renderPage('Кейсы', content, 'Наши кейсы | USSIL', 
     'Реализованные проекты компании USSIL. Кейсы установки погрузочных рамп и эстакад для крупных компаний России.', settings))
+})
+
+// Favorites page
+app.get('/izbrannoe', async (c) => {
+  const settings = c.get('settings')
+  const content = `
+  ${getInnerPageHeader(settings, '/izbrannoe')}
+
+  <main class="py-8 lg:py-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <div class="mb-6 lg:mb-8">
+        <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-2">
+          <i class="fas fa-heart text-red-500 mr-3"></i>Избранное
+        </h1>
+        <p class="text-neutral-600">Товары, которые вы сохранили</p>
+      </div>
+      <div id="favorites-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        <!-- Заполняется из localStorage через JS -->
+      </div>
+    </div>
+  </main>
+
+  ${getInnerPageFooter()}
+  `
+
+  return c.html(renderPage('Избранное', content, 'Избранное | USSIL',
+    'Ваши избранные товары USSIL. Погрузочные рампы и эстакады.', settings))
 })
 
 // Admin login page
