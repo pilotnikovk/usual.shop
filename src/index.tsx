@@ -1404,35 +1404,6 @@ app.get('/', async (c) => {
       } catch(e) { console.error('Error loading categories', e); }
     }
     
-    // Load products
-    async function loadProducts() {
-      const grid = document.getElementById('featured-products');
-      if (!grid) return;
-      try {
-        const response = await fetch('/api/products');
-        const data = await response.json();
-        if (data.success && data.data) {
-          const products = data.data.slice(0, 6);
-          grid.innerHTML = products.map(p => {
-            return \`
-            <a href="/product/\${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden">
-              <div class="aspect-video overflow-hidden">
-                <img src="\${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
-                     alt="\${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
-              </div>
-              <div class="p-6">
-                \${p.is_hit ? '<span class="inline-block px-3 py-1 bg-accent-100 text-accent-700 text-xs font-semibold rounded-full mb-3">Хит продаж</span>' : ''}
-                <h3 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600">\${p.name}</h3>
-                <p class="text-neutral-600 text-sm mb-4">\${p.short_description || ''}</p>
-                <div class="flex flex-col">
-                  <span class="text-2xl font-bold text-primary-600">\${p.price ? Math.round(p.price).toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
-                </div>
-              </div>
-            </a>
-          \`}).join('');
-        }
-      } catch(e) { console.error('Error loading products', e); }
-    }
     
     // Load reviews
     async function loadReviews() {
@@ -1496,7 +1467,6 @@ app.get('/', async (c) => {
     // Load on page load
     document.addEventListener('DOMContentLoaded', () => {
       loadCategories();
-      loadProducts();
       loadReviews();
 
       // Attach contact form handler
