@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "start:dev": "tsx watch src/index.tsx",
     "preview": "npm run build && npm start",
-    "db:migrate": "psql $DATABASE_URL -f migrations/0001_postgresql_schema.sql",
+    "db:migrate": "psql $DATABASE_URL -f migrations/0001_postgresql_schema.sql && psql $DATABASE_URL -f migrations/0002_featured_order.sql",
     "db:seed": "psql $DATABASE_URL -f migrations/seed_postgresql.sql",
     "db:reset": "psql $DATABASE_URL -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' && npm run db:migrate && npm run db:seed",
     "typecheck": "tsc --noEmit",
