@@ -3485,7 +3485,7 @@ app.get('/admin', async (c) => {
             '<button onclick="movePopularDown(' + i + ')" ' + (i === popularItems.length - 1 ? 'disabled' : '') + ' class="w-6 h-5 flex items-center justify-center rounded text-neutral-400 hover:text-neutral-700 hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><i class="fas fa-chevron-down text-xs"></i></button>' +
           '</div>' +
           '<span class="w-7 h-7 bg-orange-100 text-orange-600 text-xs font-bold rounded-full flex items-center justify-center flex-shrink-0">' + (i + 1) + '</span>' +
-          '<img src="' + (p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=80&h=60&fit=crop') + '" class="w-12 h-10 object-cover rounded-lg flex-shrink-0" onerror="this.src=\'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=80&h=60&fit=crop\'">' +
+          '<img src="' + (p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=80&h=60&fit=crop') + '" class="w-12 h-10 object-cover rounded-lg flex-shrink-0">' +
           '<span class="flex-1 text-sm font-medium text-neutral-800 truncate">' + p.name + '</span>' +
           '<button onclick="removeFromPopular(' + i + ')" class="w-7 h-7 flex items-center justify-center rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"><i class="fas fa-times text-xs"></i></button>' +
         '</div>'
@@ -3505,7 +3505,7 @@ app.get('/admin', async (c) => {
       }
       list.innerHTML = available.map(p =>
         '<div class="flex items-center gap-3 p-2 hover:bg-neutral-50 rounded-lg" data-product-id="' + p.id + '" data-product-name="' + (p.name || '').replace(/"/g, '&quot;') + '" data-product-image="' + (p.main_image || '') + '">' +
-          '<img src="' + (p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=60&h=45&fit=crop') + '" class="w-10 h-8 object-cover rounded flex-shrink-0" onerror="this.src=\'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=60&h=45&fit=crop\'">' +
+          '<img src="' + (p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=60&h=45&fit=crop') + '" class="w-10 h-8 object-cover rounded flex-shrink-0">' +
           '<span class="flex-1 text-sm text-neutral-700 truncate">' + p.name + '</span>' +
           '<button onclick="addToPopular(this)" class="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors"><i class="fas fa-plus text-xs"></i></button>' +
         '</div>'
@@ -4287,6 +4287,7 @@ app.get('/admin', async (c) => {
       if (section === 'cases') loadCases();
       if (section === 'partners') loadPartners();
       if (section === 'categories') loadCategories();
+      if (section === 'popular') loadPopularSection();
       
       document.querySelectorAll('.admin-section').forEach(el => el.classList.add('hidden'));
       document.getElementById('section-' + section).classList.remove('hidden');
