@@ -981,11 +981,31 @@ app.get('/', async (c) => {
   // Load cases and partners
   let cases: any[] = []
   let partners: any[] = []
+  let featuredProducts: any[] = []
   try {
     cases = await sql`SELECT * FROM cases WHERE is_active = 1 ORDER BY sort_order LIMIT 6`
   } catch (e) {}
   try {
     partners = await sql`SELECT * FROM partners WHERE is_active = 1 ORDER BY sort_order`
+  } catch (e) {}
+  try {
+    featuredProducts = await sql`
+      SELECT p.*, c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.is_active = 1 AND p.featured_order IS NOT NULL
+      ORDER BY p.featured_order ASC
+    `
+    if (featuredProducts.length === 0) {
+      featuredProducts = await sql`
+        SELECT p.*, c.name as category_name
+        FROM products p
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.is_active = 1
+        ORDER BY p.sort_order
+        LIMIT 6
+      `
+    }
   } catch (e) {}
   
   const content = `
@@ -1146,7 +1166,24 @@ app.get('/', async (c) => {
       </div>
       
       <div id="featured-products" class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-        <!-- Products loaded via JS -->
+        ${featuredProducts.map((p: any) => `
+          <a href="/product/${p.slug}" class="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all overflow-hidden product-card">
+            <div class="aspect-video overflow-hidden bg-neutral-100">
+              <img src="${p.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=600&h=400&fit=crop'}"
+                   alt="${p.name}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy">
+            </div>
+            <div class="p-6">
+              ${p.category_name ? `<span class="inline-block px-2 py-1 bg-primary-50 text-primary-600 text-xs font-medium rounded-lg mb-3">${p.category_name}</span>` : ''}
+              ${p.is_hit ? '<span class="inline-block px-3 py-1 bg-accent-100 text-accent-700 text-xs font-semibold rounded-full mb-3 ml-1">Хит продаж</span>' : ''}
+              <h3 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600">${p.name}</h3>
+              <p class="text-neutral-600 text-sm mb-4 line-clamp-2">${p.short_description || ''}</p>
+              <div class="flex items-center justify-between pt-4 border-t border-neutral-100">
+                <span class="text-2xl font-bold text-primary-600">${p.price ? Math.round(p.price).toLocaleString('ru-RU') + ' ₽' : 'По запросу'}</span>
+                <span class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium rounded-xl transition-colors">Подробнее</span>
+              </div>
+            </div>
+          </a>
+        `).join('')}
       </div>
     </div>
   </section>
