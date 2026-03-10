@@ -6,7 +6,7 @@ Disallow: /admin
 Disallow: /api/admin/
 
 # Sitemap
-Sitemap: https://armata-rampa.ru/sitemap.xml
+Sitemap: https://ussil.ru/sitemap.xml
 
 # Crawl delay
 Crawl-delay: 1

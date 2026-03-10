@@ -108,19 +108,35 @@ app.get('/health', (c) => {
 // ==========================================
 
 // Auto-generated sitemap.xml
-app.get('/sitemap.xml', (c) => {
+app.get('/sitemap.xml', async (c) => {
+  const settings = c.get('settings')
+  const baseUrl = (settings.site_url || 'https://ussil.ru').replace(/\/$/, '')
+  const today = new Date().toISOString().split('T')[0]
+
+  let categories: any[] = []
+  let products: any[] = []
+  try { categories = await sql`SELECT slug, updated_at FROM categories WHERE is_active = 1` } catch (e) {}
+  try { products = await sql`SELECT slug, updated_at FROM products WHERE is_active = 1` } catch (e) {}
+
+  const staticUrls = [
+    { path: '/', priority: '1.00' },
+    { path: '/katalog', priority: '0.90' },
+    { path: '/o-kompanii', priority: '0.70' },
+    { path: '/kejsy', priority: '0.75' },
+    { path: '/dostavka', priority: '0.65' },
+    { path: '/kontakty', priority: '0.60' },
+  ]
+
+  const toUrl = (path: string, priority: string, lastmod = today) =>
+    `<url><loc>${baseUrl}${path}</loc><lastmod>${lastmod}</lastmod><priority>${priority}</priority></url>`
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://ussil.ru/</loc><lastmod>2026-02-19</lastmod><priority>1.00</priority></url>
-  <url><loc>https://ussil.ru/katalog</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/o-kompanii</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/kejsy</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/dostavka</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/kontakty</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/katalog/mobilnye-rampy</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/katalog/gidravlicheskie-rampy</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
-  <url><loc>https://ussil.ru/katalog/estakady</loc><lastmod>2026-02-19</lastmod><priority>0.80</priority></url>
+  ${staticUrls.map(u => toUrl(u.path, u.priority)).join('\n  ')}
+  ${categories.map(cat => toUrl(`/katalog/${cat.slug}`, '0.85', cat.updated_at ? new Date(cat.updated_at).toISOString().split('T')[0] : today)).join('\n  ')}
+  ${products.map(p => toUrl(`/product/${p.slug}`, '0.80', p.updated_at ? new Date(p.updated_at).toISOString().split('T')[0] : today)).join('\n  ')}
 </urlset>`
+
   return c.text(xml, 200, { 'Content-Type': 'application/xml' })
 })
 
@@ -903,23 +919,85 @@ app.use('/uploads/*', serveStatic({ root: './public' }))
 // LIGHT THEME 2026 - CALM COLORS
 // ==========================================
 
-const renderPage = (title: string, content: string, seoTitle?: string, seoDescription?: string, settings?: Record<string, string>) => {
+const renderPage = (title: string, content: string, seoTitle?: string, seoDescription?: string, settings?: Record<string, string>, canonicalPath?: string, extraSchemas?: string[]) => {
   const siteName = settings?.site_name || 'YUSSIL'
+  const baseUrl = settings?.site_url || 'https://ussil.ru'
+  const logoUrl = settings?.logo_url || ''
+  const phone = settings?.phone_main || ''
+  const email = settings?.email || ''
+  const address = settings?.address || 'г. Ковров, ул. Свердлова, 108А'
+  const pageTitle = seoTitle || title
+  const fullTitle = pageTitle.includes(siteName) ? pageTitle : `${pageTitle} | ${siteName}`
+  const description = seoDescription || 'Производитель погрузочных рамп и эстакад. Собственное производство, гарантия качества, доставка по России.'
+  const canonical = canonicalPath ? `${baseUrl}${canonicalPath}` : baseUrl
+  const ogImage = settings?.hero_bg_image || `${baseUrl}/static/favicon.svg`
+
+  const localBusinessSchema = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'LocalBusiness',
+    name: siteName,
+    description: 'Производитель погрузочных рамп и эстакад. Собственное производство в г. Ковров. Гарантия 24 месяца.',
+    url: baseUrl,
+    telephone: phone,
+    email: email,
+    logo: logoUrl || undefined,
+    address: {
+      '@type': 'PostalAddress',
+      streetAddress: address,
+      addressLocality: 'Ковров',
+      addressRegion: 'Владимирская область',
+      postalCode: '601900',
+      addressCountry: 'RU'
+    },
+    geo: {
+      '@type': 'GeoCoordinates',
+      latitude: '56.3566',
+      longitude: '41.3152'
+    },
+    openingHoursSpecification: {
+      '@type': 'OpeningHoursSpecification',
+      dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+      opens: '09:00',
+      closes: '18:00'
+    },
+    areaServed: {
+      '@type': 'Country',
+      name: 'Россия'
+    },
+    priceRange: '₽₽'
+  })
+
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${seoTitle || title} | ${siteName}</title>
-  <meta name="yandex-verification" content="e392f1a129e5c15b" />
+  <title>${fullTitle}</title>
+  <meta name="description" content="${description}">
+  <link rel="canonical" href="${canonical}">
 
-  <meta name="description" content="${seoDescription || 'Производитель погрузочных рамп и эстакад. Собственное производство, гарантия качества, доставка по России.'}">
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ru_RU">
+  <meta property="og:site_name" content="${siteName}">
+  <meta property="og:title" content="${fullTitle}">
+  <meta property="og:description" content="${description}">
+  <meta property="og:url" content="${canonical}">
+  <meta property="og:image" content="${ogImage}">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${fullTitle}">
+  <meta name="twitter:description" content="${description}">
+  <meta name="twitter:image" content="${ogImage}">
+
+  <meta name="yandex-verification" content="e392f1a129e5c15b" />
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -946,13 +1024,12 @@ const renderPage = (title: string, content: string, seoTitle?: string, seoDescri
       }
     }
   </script>
-  
+
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.0/css/all.min.css" rel="stylesheet">
   <link href="/static/styles.css" rel="stylesheet">
-  
-  <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"Organization","name":"${siteName}","description":"Производитель погрузочных рамп и эстакад","url":"https://ussil.ru"}
-  </script>
+
+  <script type="application/ld+json">${localBusinessSchema}</script>
+  ${extraSchemas ? extraSchemas.map(s => `<script type="application/ld+json">${s}</script>`).join('\n  ') : ''}
 </head>
 <body class="bg-neutral-50 text-neutral-800 font-sans antialiased">
   ${content}
@@ -1515,51 +1592,17 @@ app.get('/', async (c) => {
   </script>
   `
   
-  return c.html(renderPage('Главная', content, siteName + ' — Погрузочные рампы и эстакады от производителя', 
-    'Производитель погрузочных рамп и эстакад. Собственное производство Владимирская область, г. Ковров. Гарантия 24 месяца. Доставка по России.', settings))
+  return c.html(renderPage('Главная', content, siteName + ' — Погрузочные рампы и эстакады от производителя',
+    'Производитель погрузочных рамп и эстакад. Собственное производство Владимирская область, г. Ковров. Гарантия 24 месяца. Доставка по России.', settings, '/'))
 })
 
 // Catalog page
 app.get('/katalog', async (c) => {
   const settings = c.get('settings')
-  const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
-  
+  const siteName = settings.site_name || 'YUSSIL'
+
   const content = `
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto">
-      <nav class="flex items-center justify-between px-6 py-4">
-        <a href="/" class="flex items-center gap-3">
-          <img src="${logoUrl}" alt="YUSSIL" class="h-8 w-auto">
-          <span class="text-lg font-bold text-neutral-800">YUSSIL</span>
-        </a>
-        <div class="hidden lg:flex items-center gap-1">
-          <a href="/katalog" class="px-4 py-2 rounded-lg text-primary-600 bg-primary-50 font-medium">Каталог</a>
-          <a href="/o-kompanii" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">О компании</a>
-          <a href="/kejsy" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Кейсы</a>
-          <a href="/dostavka" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Доставка</a>
-          <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
-        </div>
-        <div class="flex items-center gap-4">
-          <a href="tel:${(settings.phone_main || '84923225431').replace(/[^+\\d]/g, '')}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold">
-            <i class="fas fa-phone"></i> ${settings.phone_main || '8 (49232) 2-54-31'}
-          </a>
-          <button onclick="toggleMobileMenu()" class="lg:hidden w-10 h-10 rounded-lg bg-neutral-100 flex items-center justify-center">
-            <i class="fas fa-bars text-neutral-600"></i>
-          </button>
-        </div>
-      </nav>
-      <!-- Mobile Menu -->
-      <div id="mobileMenu" class="hidden lg:hidden border-t border-neutral-100 bg-white">
-        <div class="px-6 py-4 space-y-2">
-          <a href="/katalog" class="block px-4 py-3 rounded-lg bg-primary-50 text-primary-600 font-medium">Каталог</a>
-          <a href="/o-kompanii" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">О компании</a>
-          <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
-          <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
-          <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
-        </div>
-      </div>
-    </div>
-  </header>
+  ${getInnerPageHeader(settings, '/katalog')}
 
   <main class="py-8 lg:py-12">
     <div class="max-w-7xl mx-auto px-4 sm:px-6">
@@ -1593,17 +1636,9 @@ app.get('/katalog', async (c) => {
     </div>
   </main>
 
-  <footer class="bg-neutral-800 text-white py-8 mt-12">
-    <div class="max-w-7xl mx-auto px-6 text-center text-neutral-400 text-sm">
-      &copy; ${new Date().getFullYear()} YUSSIL. Все права защищены.
-    </div>
-  </footer>
-  
+  ${getInnerPageFooter(settings)}
+
   <script>
-    function toggleMobileMenu() {
-      const menu = document.getElementById('mobileMenu');
-      menu.classList.toggle('hidden');
-    }
     function toggleCategoriesFilter() {
       const aside = document.getElementById('categoriesAside');
       aside.classList.toggle('hidden');
@@ -1611,16 +1646,16 @@ app.get('/katalog', async (c) => {
     }
   </script>
   `
-  
-  return c.html(renderPage('Каталог продукции', content, 'Каталог рамп и эстакад | YUSSIL', 
-    'Каталог погрузочных рамп и эстакад от производителя. Мобильные, гидравлические рампы, эстакады. Цены, характеристики.', settings))
+
+  return c.html(renderPage('Каталог продукции', content, `Каталог рамп и эстакад | ${siteName}`,
+    'Каталог погрузочных рамп и эстакад от производителя. Мобильные, гидравлические рампы, эстакады. Цены, характеристики.', settings, '/katalog'))
 })
 
 // Category page
 app.get('/katalog/:slug', async (c) => {
   const slug = c.req.param('slug')
   const settings = c.get('settings')
-  const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
+  const siteName = settings.site_name || 'YUSSIL'
   
   // Get category info
   let category: any = null
@@ -1701,297 +1736,248 @@ app.get('/katalog/:slug', async (c) => {
   </script>
   `
   
-  return c.html(renderPage(category.name, content, `${category.seo_title || category.name + ' | YUSSIL'}`, 
-    category.seo_description || `${category.name} от производителя. Цены, характеристики, доставка по России.`, settings))
+  return c.html(renderPage(category.name, content, `${category.seo_title || category.name + ' | ' + siteName}`,
+    category.seo_description || `${category.name} от производителя. Цены, характеристики, доставка по России.`, settings, `/katalog/${slug}`))
 })
 
 // Product page
 app.get('/product/:slug', async (c) => {
   const slug = c.req.param('slug')
   const settings = c.get('settings')
-  const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
-  const phoneMain = settings.phone_main || '8 (49232) 2-54-31'
-  const phoneClean = phoneMain.replace(/[^+\d]/g, '')
-  
-  const content = `
-  <header class="bg-white shadow-sm sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto">
-      <nav class="flex items-center justify-between px-4 sm:px-6 py-4">
-        <a href="/" class="flex items-center gap-2 sm:gap-3">
-          <img src="${logoUrl}" alt="YUSSIL" class="h-8 w-auto">
-          <span class="text-lg font-bold text-neutral-800">YUSSIL</span>
-        </a>
-        <div class="hidden lg:flex items-center gap-1">
-          <a href="/katalog" class="px-4 py-2 rounded-lg text-primary-600 bg-primary-50 font-medium">Каталог</a>
-          <a href="/o-kompanii" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">О компании</a>
-          <a href="/kejsy" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Кейсы</a>
-          <a href="/dostavka" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Доставка</a>
-          <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
-        </div>
-        <div class="flex items-center gap-2 sm:gap-4">
-          <a href="tel:${phoneClean}" class="hidden md:flex items-center gap-2 text-primary-600 font-semibold text-sm">
-            <i class="fas fa-phone"></i> ${phoneMain}
-          </a>
-          <button onclick="toggleMobileMenu()" class="lg:hidden w-10 h-10 rounded-lg bg-neutral-100 flex items-center justify-center">
-            <i class="fas fa-bars text-neutral-600"></i>
-          </button>
-        </div>
-      </nav>
-      <!-- Mobile Menu -->
-      <div id="mobileMenu" class="hidden lg:hidden border-t border-neutral-100 bg-white">
-        <div class="px-4 sm:px-6 py-4 space-y-2">
-          <a href="/katalog" class="block px-4 py-3 rounded-lg bg-primary-50 text-primary-600 font-medium">Каталог</a>
-          <a href="/o-kompanii" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">О компании</a>
-          <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
-          <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
-          <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
-          <a href="tel:${phoneClean}" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
-            <i class="fas fa-phone mr-2"></i>Позвонить
-          </a>
-        </div>
-      </div>
-    </div>
-  </header>
+  const siteName = settings.site_name || 'YUSSIL'
+  const baseUrl = settings.site_url || 'https://ussil.ru'
+  const waPhone = (settings.phone_whatsapp || '89209160100').replace(/[^0-9]/g, '')
 
-  <main class="py-12">
-    <div class="max-w-7xl mx-auto px-6">
-      <div id="product-detail" data-slug="${slug}">
-        <div class="text-center py-12">
-          <i class="fas fa-spinner fa-spin text-4xl text-primary-500"></i>
-          <p class="mt-4 text-neutral-500">Загрузка...</p>
+  // Fetch product server-side for SEO
+  let product: any = null
+  try {
+    const rows = await sql`
+      SELECT p.*, c.name as category_name, c.slug as category_slug
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.slug = ${slug} AND p.is_active = 1
+    `
+    product = rows[0] || null
+    if (product) {
+      await sql`UPDATE products SET views_count = views_count + 1 WHERE slug = ${slug}`
+    }
+  } catch (e) {}
+
+  if (!product) {
+    return c.notFound()
+  }
+
+  // Parse specs
+  let specs: Record<string, string> = {}
+  try {
+    specs = product.specifications
+      ? (typeof product.specifications === 'string' ? JSON.parse(product.specifications) : product.specifications)
+      : {}
+  } catch (e) { specs = {} }
+
+  // Parse images
+  let images: string[] = []
+  try {
+    images = product.images
+      ? (typeof product.images === 'string' ? JSON.parse(product.images) : product.images)
+      : []
+  } catch (e) { images = [] }
+
+  const mainImage = product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&h=600&fit=crop'
+  const priceNum = product.price ? Math.round(product.price) : null
+  const oldPriceNum = product.old_price ? Math.round(product.old_price) : null
+
+  // Build specs HTML
+  const specKeys = ['Общая длина', 'Грузоподъемность', 'Длина площадки', 'Длина подъема', 'Высота подъема', 'Рабочая ширина рампы', 'Транспортировочные колеса', 'Подъемное устройство']
+  const allSpecKeys = [...specKeys, ...Object.keys(specs).filter(k => !specKeys.includes(k))]
+  const specsHtml = allSpecKeys
+    .filter(key => specs[key])
+    .map(key => `<div class="flex justify-between py-3 border-b border-neutral-100"><span class="text-neutral-600">${key}</span><span class="font-semibold text-neutral-800">${specs[key]}</span></div>`)
+    .join('')
+
+  // Build thumbnails HTML
+  const allImages = [mainImage, ...images]
+  const thumbsHtml = allImages.length > 1
+    ? `<div class="grid grid-cols-4 gap-2 mt-4">
+        ${allImages.slice(0, 4).map((img, i) => `
+          <button onclick="changeMainImage('${img}')" class="aspect-video rounded-lg overflow-hidden border-2 ${i === 0 ? 'border-primary-500' : 'border-transparent hover:border-primary-500'} transition-colors">
+            <img src="${img}" alt="${product.name}" class="w-full h-full object-cover">
+          </button>`).join('')}
+      </div>`
+    : ''
+
+  const seoTitle = product.seo_title || product.name
+  const seoDesc = product.seo_description || product.short_description
+    || `Купить ${product.name} от производителя ${siteName}. ${priceNum ? 'Цена ' + priceNum.toLocaleString('ru-RU') + ' ₽.' : 'Цена по запросу.'} Гарантия 24 месяца. Доставка по России.`
+
+  // Product schema
+  const productSchema = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    name: product.name,
+    description: product.short_description || product.name,
+    image: mainImage,
+    url: `${baseUrl}/product/${slug}`,
+    brand: { '@type': 'Brand', name: siteName },
+    offers: {
+      '@type': 'Offer',
+      ...(priceNum ? { price: priceNum, priceCurrency: 'RUB' } : { priceCurrency: 'RUB' }),
+      availability: product.in_stock ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder',
+      seller: { '@type': 'Organization', name: siteName }
+    }
+  })
+
+  // Breadcrumb schema
+  const breadcrumbSchema = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Главная', item: baseUrl },
+      { '@type': 'ListItem', position: 2, name: 'Каталог', item: `${baseUrl}/katalog` },
+      { '@type': 'ListItem', position: 3, name: product.name, item: `${baseUrl}/product/${slug}` }
+    ]
+  })
+
+  const content = `
+  ${getInnerPageHeader(settings, '/katalog')}
+
+  <main class="py-8 lg:py-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <nav class="text-sm text-neutral-500 mb-6" aria-label="Хлебные крошки">
+        <a href="/" class="hover:text-primary-600">Главная</a> /
+        <a href="/katalog" class="hover:text-primary-600">Каталог</a> /
+        <span class="text-neutral-800">${product.name}</span>
+      </nav>
+
+      <div class="grid lg:grid-cols-2 gap-8 lg:gap-12">
+        <!-- Фото товара -->
+        <div>
+          <div class="aspect-video rounded-2xl overflow-hidden bg-neutral-100">
+            <img id="main-product-image" src="${mainImage}" alt="${product.name}" class="w-full h-full object-cover">
+          </div>
+          ${thumbsHtml}
+        </div>
+
+        <!-- Информация о товаре -->
+        <div class="space-y-6">
+          <div>
+            ${product.is_hit ? '<span class="inline-block px-3 py-1 bg-accent-100 text-accent-700 text-xs font-semibold rounded-full mb-3">Хит продаж</span>' : ''}
+            ${product.is_new ? '<span class="inline-block px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full mb-3 ml-2">Новинка</span>' : ''}
+            <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-2">${product.name}</h1>
+            <p class="text-neutral-600">${product.short_description || ''}</p>
+          </div>
+
+          <div class="bg-neutral-50 rounded-2xl p-6">
+            <div class="flex items-baseline gap-4 mb-2">
+              ${priceNum
+                ? `<span class="text-3xl font-bold text-primary-600">${priceNum.toLocaleString('ru-RU')} ₽</span>${oldPriceNum ? `<span class="text-xl text-neutral-400 line-through">${oldPriceNum.toLocaleString('ru-RU')} ₽</span>` : ''}`
+                : '<span class="text-2xl font-bold text-primary-600">Цена по запросу</span>'}
+            </div>
+            <div class="flex items-center gap-3 mt-4">
+              ${product.in_stock
+                ? '<span class="flex items-center gap-2 text-green-600"><i class="fas fa-check-circle"></i> В наличии</span>'
+                : '<span class="flex items-center gap-2 text-orange-600"><i class="fas fa-clock"></i> Под заказ</span>'}
+            </div>
+            <div class="flex flex-col sm:flex-row gap-3 mt-6">
+              <a href="#contact-form" class="flex-1 px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl text-center transition-colors">
+                <i class="fas fa-phone-alt mr-2"></i>Заказать звонок
+              </a>
+              <a href="https://wa.me/${waPhone}?text=${encodeURIComponent('Здравствуйте! Интересует товар: ' + product.name)}" target="_blank"
+                 class="flex-1 px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-xl text-center transition-colors">
+                <i class="fab fa-whatsapp mr-2"></i>WhatsApp
+              </a>
+            </div>
+          </div>
+
+          ${specsHtml ? `
+            <div class="bg-white border border-neutral-200 rounded-2xl p-6">
+              <h2 class="text-lg font-bold text-neutral-800 mb-4"><i class="fas fa-list-alt mr-2 text-primary-500"></i>Характеристики</h2>
+              <div>${specsHtml}</div>
+            </div>
+          ` : ''}
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="bg-blue-50 rounded-xl p-4 text-center">
+              <i class="fas fa-shield-alt text-2xl text-blue-600 mb-2 block"></i>
+              <p class="text-sm font-semibold text-neutral-800">Гарантия 24 мес</p>
+            </div>
+            <div class="bg-green-50 rounded-xl p-4 text-center">
+              <i class="fas fa-truck text-2xl text-green-600 mb-2 block"></i>
+              <p class="text-sm font-semibold text-neutral-800">Доставка по РФ</p>
+            </div>
+          </div>
         </div>
       </div>
+
+      ${product.full_description ? `
+        <div class="mt-12 bg-white border border-neutral-200 rounded-2xl p-6 lg:p-8">
+          <h2 class="text-xl font-bold text-neutral-800 mb-4">Описание</h2>
+          <div class="prose max-w-none text-neutral-600">${product.full_description}</div>
+        </div>
+      ` : ''}
+
+      <section id="contact-form" class="mt-12 bg-gradient-to-br from-primary-600 to-primary-800 rounded-2xl p-6 lg:p-10">
+        <div class="max-w-2xl mx-auto text-center text-white">
+          <h2 class="text-2xl lg:text-3xl font-bold mb-4">Получить консультацию</h2>
+          <p class="mb-6 text-primary-100">Оставьте заявку и наш менеджер свяжется с вами в ближайшее время</p>
+          <form id="product-lead-form" class="space-y-4">
+            <input type="hidden" name="product_id" value="${product.id}">
+            <input type="hidden" name="product_name" value="${product.name}">
+            <div class="grid sm:grid-cols-2 gap-4">
+              <input type="text" name="name" placeholder="Ваше имя" required class="w-full px-4 py-3 rounded-xl border-0 text-neutral-800 placeholder-neutral-400">
+              <input type="tel" name="phone" placeholder="Телефон" required class="w-full px-4 py-3 rounded-xl border-0 text-neutral-800 placeholder-neutral-400">
+            </div>
+            <textarea name="message" placeholder="Сообщение (необязательно)" rows="3" class="w-full px-4 py-3 rounded-xl border-0 text-neutral-800 placeholder-neutral-400 resize-none"></textarea>
+            <button type="submit" class="w-full sm:w-auto px-8 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl transition-colors">
+              <i class="fas fa-paper-plane mr-2"></i>Отправить заявку
+            </button>
+          </form>
+        </div>
+      </section>
     </div>
   </main>
 
-  <footer class="bg-neutral-800 text-white py-8 mt-12">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 text-center text-neutral-400 text-sm">
-      &copy; ${new Date().getFullYear()} YUSSIL. Все права защищены.
-    </div>
-  </footer>
-  
-  <script>
-    function toggleMobileMenu() {
-      const menu = document.getElementById('mobileMenu');
-      menu.classList.toggle('hidden');
-    }
-    
-    // Load product details
-    async function loadProductDetail() {
-      const container = document.getElementById('product-detail');
-      const slug = container.dataset.slug;
-      
-      try {
-        const response = await fetch('/api/products/' + slug);
-        const data = await response.json();
-        
-        if (!data.success || !data.data) {
-          container.innerHTML = '<div class="text-center py-12"><h2 class="text-2xl font-bold text-red-500">Товар не найден</h2><a href="/katalog" class="mt-4 inline-block text-primary-600 hover:underline">← Вернуться в каталог</a></div>';
-          return;
-        }
-        
-        const product = data.data;
-        
-        // Parse specifications
-        let specs = {};
-        try {
-          specs = product.specifications ? (typeof product.specifications === 'string' ? JSON.parse(product.specifications) : product.specifications) : {};
-        } catch(e) { specs = {}; }
-        
-        const priceWithVAT = product.price ? Math.round(product.price) : null;
-        const oldPriceWithVAT = product.old_price ? Math.round(product.old_price) : null;
-        
-        // Build specifications HTML
-        const specKeys = ['Общая длина', 'Грузоподъемность', 'Длина площадки', 'Длина подъема', 'Высота подъема', 'Рабочая ширина рампы', 'Транспортировочные колеса', 'Подъемное устройство'];
-        let specsHtml = '';
-        specKeys.forEach(key => {
-          if (specs[key]) {
-            specsHtml += '<div class="flex justify-between py-3 border-b border-neutral-100"><span class="text-neutral-600">' + key + '</span><span class="font-semibold text-neutral-800">' + specs[key] + '</span></div>';
-          }
-        });
-        
-        // Add any extra specs
-        Object.keys(specs).forEach(key => {
-          if (!specKeys.includes(key) && specs[key]) {
-            specsHtml += '<div class="flex justify-between py-3 border-b border-neutral-100"><span class="text-neutral-600">' + key + '</span><span class="font-semibold text-neutral-800">' + specs[key] + '</span></div>';
-          }
-        });
-        
-        // Parse images
-        let images = [];
-        try {
-          images = product.images ? (typeof product.images === 'string' ? JSON.parse(product.images) : product.images) : [];
-        } catch(e) { images = []; }
-        
-        const mainImage = product.main_image || 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=800&h=600&fit=crop';
-        
-        container.innerHTML = \`
-          <nav class="text-sm text-neutral-500 mb-6">
-            <a href="/" class="hover:text-primary-600">Главная</a> / 
-            <a href="/katalog" class="hover:text-primary-600">Каталог</a> / 
-            <span class="text-neutral-800">\${product.name}</span>
-          </nav>
-          
-          <div class="grid lg:grid-cols-2 gap-8 lg:gap-12">
-            <!-- Product Images -->
-            <div class="space-y-4">
-              <div class="aspect-video rounded-2xl overflow-hidden bg-neutral-100">
-                <img id="main-product-image" src="\${mainImage}" alt="\${product.name}" class="w-full h-full object-cover">
-              </div>
-              \${images.length > 0 ? \`
-                <div class="grid grid-cols-4 gap-2">
-                  <button onclick="changeMainImage('\${mainImage}')" class="aspect-video rounded-lg overflow-hidden border-2 border-primary-500">
-                    <img src="\${mainImage}" alt="" class="w-full h-full object-cover">
-                  </button>
-                  \${images.slice(0, 3).map(img => \`
-                    <button onclick="changeMainImage('\${img}')" class="aspect-video rounded-lg overflow-hidden border-2 border-transparent hover:border-primary-500 transition-colors">
-                      <img src="\${img}" alt="" class="w-full h-full object-cover">
-                    </button>
-                  \`).join('')}
-                </div>
-              \` : ''}
-            </div>
-            
-            <!-- Product Info -->
-            <div class="space-y-6">
-              <div>
-                \${product.is_hit ? '<span class="inline-block px-3 py-1 bg-accent-100 text-accent-700 text-xs font-semibold rounded-full mb-3">Хит продаж</span>' : ''}
-                \${product.is_new ? '<span class="inline-block px-3 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full mb-3 ml-2">Новинка</span>' : ''}
-                <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-2">\${product.name}</h1>
-                <p class="text-neutral-600">\${product.short_description || ''}</p>
-              </div>
-              
-              <div class="bg-neutral-50 rounded-2xl p-6">
-                <div class="flex items-baseline gap-4 mb-2">
-                  \${priceWithVAT ? \`
-                    <span class="text-3xl font-bold text-primary-600">\${priceWithVAT.toLocaleString('ru-RU')} ₽</span>
-                    \${oldPriceWithVAT ? \`<span class="text-xl text-neutral-400 line-through">\${oldPriceWithVAT.toLocaleString('ru-RU')} ₽</span>\` : ''}
-                  \` : '<span class="text-2xl font-bold text-primary-600">Цена по запросу</span>'}
-                </div>
-                
-                <div class="flex items-center gap-3 mt-4">
-                  \${product.in_stock 
-                    ? '<span class="flex items-center gap-2 text-green-600"><i class="fas fa-check-circle"></i> В наличии</span>'
-                    : '<span class="flex items-center gap-2 text-orange-600"><i class="fas fa-clock"></i> Под заказ</span>'
-                  }
-                </div>
-                
-                <div class="flex flex-col sm:flex-row gap-3 mt-6">
-                  <a href="#contact-form" class="flex-1 px-6 py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-xl text-center transition-colors">
-                    <i class="fas fa-phone-alt mr-2"></i> Заказать звонок
-                  </a>
-                  <a href="https://wa.me/89209160100?text=\${encodeURIComponent('Здравствуйте! Интересует товар: ' + product.name)}" target="_blank"
-                     class="flex-1 px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-xl text-center transition-colors">
-                    <i class="fab fa-whatsapp mr-2"></i> WhatsApp
-                  </a>
-                </div>
-              </div>
-              
-              \${specsHtml ? \`
-                <div class="bg-white border border-neutral-200 rounded-2xl p-6">
-                  <h2 class="text-lg font-bold text-neutral-800 mb-4"><i class="fas fa-list-alt mr-2 text-primary-500"></i> Характеристики</h2>
-                  <div class="divide-y divide-neutral-100">
-                    \${specsHtml}
-                  </div>
-                </div>
-              \` : ''}
-              
-              <div class="grid grid-cols-2 gap-4">
-                <div class="bg-blue-50 rounded-xl p-4 text-center">
-                  <i class="fas fa-shield-alt text-2xl text-blue-600 mb-2"></i>
-                  <p class="text-sm font-semibold text-neutral-800">Гарантия 24 мес</p>
-                </div>
-                <div class="bg-green-50 rounded-xl p-4 text-center">
-                  <i class="fas fa-truck text-2xl text-green-600 mb-2"></i>
-                  <p class="text-sm font-semibold text-neutral-800">Доставка по РФ</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          \${product.full_description ? \`
-            <div class="mt-12 bg-white border border-neutral-200 rounded-2xl p-6 lg:p-8">
-              <h2 class="text-xl font-bold text-neutral-800 mb-4">Описание</h2>
-              <div class="prose max-w-none text-neutral-600">\${product.full_description}</div>
-            </div>
-          \` : ''}
-          
-          <!-- Contact Form Section -->
-          <section id="contact-form" class="mt-12 bg-gradient-to-br from-primary-600 to-primary-800 rounded-2xl p-6 lg:p-10">
-            <div class="max-w-2xl mx-auto text-center text-white">
-              <h2 class="text-2xl lg:text-3xl font-bold mb-4">Получить консультацию</h2>
-              <p class="mb-6 text-primary-100">Оставьте заявку и наш менеджер свяжется с вами в ближайшее время</p>
-              <form id="product-lead-form" class="space-y-4">
-                <input type="hidden" name="product_id" value="\${product.id}">
-                <input type="hidden" name="product_name" value="\${product.name}">
-                <div class="grid sm:grid-cols-2 gap-4">
-                  <input type="text" name="name" placeholder="Ваше имя" required class="w-full px-4 py-3 rounded-xl border-0 text-neutral-800 placeholder-neutral-400">
-                  <input type="tel" name="phone" placeholder="Телефон" required class="w-full px-4 py-3 rounded-xl border-0 text-neutral-800 placeholder-neutral-400">
-                </div>
-                <textarea name="message" placeholder="Сообщение (необязательно)" rows="3" class="w-full px-4 py-3 rounded-xl border-0 text-neutral-800 placeholder-neutral-400"></textarea>
-                <button type="submit" class="w-full sm:w-auto px-8 py-3 bg-accent-500 hover:bg-accent-600 text-white font-semibold rounded-xl transition-colors">
-                  <i class="fas fa-paper-plane mr-2"></i> Отправить заявку
-                </button>
-              </form>
-            </div>
-          </section>
-        \`;
-        
-        // Update page title
-        document.title = product.name + ' | YUSSIL';
+  ${getInnerPageFooter(settings)}
 
-        // Handle form submission
-        document.getElementById('product-lead-form').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const formData = new FormData(e.target);
-          const data = {
-            name: formData.get('name'),
-            phone: formData.get('phone'),
-            message: formData.get('message') + ' [Товар: ' + formData.get('product_name') + ']',
-            source: 'product_page'
-          };
-          
-          try {
-            const response = await fetch('/api/leads', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data)
-            });
-            
-            if (response.ok) {
-              alert('Спасибо! Ваша заявка отправлена. Мы свяжемся с вами в ближайшее время.');
-              e.target.reset();
-            } else {
-              alert('Ошибка отправки. Позвоните нам по телефону.');
-            }
-          } catch (err) {
-            alert('Ошибка отправки. Позвоните нам по телефону.');
-          }
-        });
-        
-      } catch(e) {
-        console.error('Error loading product', e);
-        container.innerHTML = '<div class="text-center py-12"><h2 class="text-2xl font-bold text-red-500">Ошибка загрузки товара</h2><a href="/katalog" class="mt-4 inline-block text-primary-600 hover:underline">← Вернуться в каталог</a></div>';
-      }
-    }
-    
+  <script>
     function changeMainImage(src) {
       document.getElementById('main-product-image').src = src;
     }
-    
-    document.addEventListener('DOMContentLoaded', loadProductDetail);
+    document.addEventListener('DOMContentLoaded', function() {
+      const form = document.getElementById('product-lead-form');
+      if (!form) return;
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        try {
+          const res = await fetch('/api/leads', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: fd.get('name'),
+              phone: fd.get('phone'),
+              message: (fd.get('message') || '') + ' [Товар: ' + fd.get('product_name') + ']',
+              source: 'product_page'
+            })
+          });
+          if (res.ok) { alert('Спасибо! Ваша заявка отправлена.'); e.target.reset(); }
+          else { alert('Ошибка отправки. Позвоните нам по телефону.'); }
+        } catch { alert('Ошибка отправки. Позвоните нам по телефону.'); }
+      });
+    });
   </script>
   `
-  
-  return c.html(renderPage('Товар', content, '', '', settings))
+
+  return c.html(renderPage(product.name, content, seoTitle, seoDesc, settings, `/product/${slug}`, [productSchema, breadcrumbSchema]))
 })
 
 // Helper function for inner page header
 const getInnerPageHeader = (settings: Record<string, string>, activePage: string) => {
   const logoUrl = settings.logo_url || 'https://www.genspark.ai/api/files/s/eBVbsOpD'
+  const siteName = settings.site_name || 'YUSSIL'
   const phoneMain = settings.phone_main || '8 (49232) 2-54-31'
   const phoneClean = phoneMain.replace(/[^+\\d]/g, '')
-  
+
   const pages = [
     { href: '/katalog', name: 'Каталог' },
     { href: '/o-kompanii', name: 'О компании' },
@@ -1999,14 +1985,14 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
     { href: '/dostavka', name: 'Доставка' },
     { href: '/kontakty', name: 'Контакты' }
   ]
-  
+
   return `
   <header class="bg-white shadow-sm sticky top-0 z-50">
     <div class="max-w-7xl mx-auto">
       <nav class="flex items-center justify-between px-4 sm:px-6 py-4">
         <a href="/" class="flex items-center gap-2 sm:gap-3">
-          <img src="${logoUrl}" alt="YUSSIL" class="h-8 w-auto">
-          <span class="text-lg font-bold text-neutral-800">YUSSIL</span>
+          <img src="${logoUrl}" alt="${siteName}" class="h-8 w-auto">
+          <span class="text-lg font-bold text-neutral-800">${siteName}</span>
         </a>
         <div class="hidden lg:flex items-center gap-1">
           ${pages.map(p => `<a href="${p.href}" class="px-4 py-2 rounded-lg ${activePage === p.href ? 'text-primary-600 bg-primary-50' : 'text-neutral-600 hover:text-primary-600 hover:bg-primary-50'} transition-all font-medium">${p.name}</a>`).join('')}
@@ -2033,10 +2019,12 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
   </header>`
 }
 
-const getInnerPageFooter = () => `
+const getInnerPageFooter = (settings?: Record<string, string>) => {
+  const siteName = settings?.site_name || 'YUSSIL'
+  return `
   <footer class="bg-neutral-800 text-white py-8 mt-12">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 text-center text-neutral-400 text-sm">
-      &copy; ${new Date().getFullYear()} YUSSIL. Все права защищены.
+      &copy; ${new Date().getFullYear()} ${siteName}. Все права защищены.
     </div>
   </footer>
   
@@ -2046,16 +2034,18 @@ const getInnerPageFooter = () => `
       menu.classList.toggle('hidden');
     }
   </script>`
+}
 
 // Static pages
 app.get('/o-kompanii', async (c) => {
   const settings = c.get('settings')
+  const siteName = settings.site_name || 'YUSSIL'
   const content = `
   ${getInnerPageHeader(settings, '/o-kompanii')}
 
   <main class="py-8 lg:py-12">
     <div class="max-w-4xl mx-auto px-4 sm:px-6">
-      <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-6 lg:mb-8">О компании YUSSIL</h1>
+      <h1 class="text-2xl lg:text-3xl font-bold text-neutral-800 mb-6 lg:mb-8">О компании ${siteName}</h1>
       
       <div class="prose prose-lg max-w-none">
         <p class="text-neutral-600 text-base lg:text-lg leading-relaxed mb-6">
@@ -2091,16 +2081,17 @@ app.get('/o-kompanii', async (c) => {
     </div>
   </main>
 
-  ${getInnerPageFooter()}
+  ${getInnerPageFooter(settings)}
   `
   
-  return c.html(renderPage('О компании', content, 'О компании YUSSIL — производитель рамп и эстакад', 
-    'YUSSIL — российский производитель погрузочных рамп и эстакад с 2010 года. Собственное производство, гарантия качества.', settings))
+  return c.html(renderPage('О компании', content, `О компании ${siteName} — производитель рамп и эстакад`,
+    `${siteName} — российский производитель погрузочных рамп и эстакад с 2010 года. Собственное производство, гарантия качества.`, settings, '/o-kompanii'))
 })
 
 app.get('/kontakty', async (c) => {
   const settings = c.get('settings')
-  
+  const siteName = settings.site_name || 'YUSSIL'
+
   const content = `
   ${getInnerPageHeader(settings, '/kontakty')}
 
@@ -2118,10 +2109,11 @@ app.get('/kontakty', async (c) => {
               <div>
                 <div class="text-sm text-neutral-500">Телефон</div>
                 <a href="tel:${(settings.phone_main || '84923225431').replace(/[^+\\d]/g, '')}" class="text-lg font-semibold text-neutral-800">${settings.phone_main || '8 (49232) 2-54-31'}</a>
+                ${settings.phone_secondary ? `<div class="mt-1"><a href="tel:${settings.phone_secondary.replace(/[^+\\d]/g, '')}" class="text-base font-medium text-neutral-600">${settings.phone_secondary}</a></div>` : ''}
               </div>
             </div>
           </div>
-          
+
           <div class="p-5 lg:p-6 bg-white rounded-2xl shadow-sm">
             <div class="flex items-center gap-4">
               <div class="w-12 h-12 rounded-xl bg-primary-100 flex items-center justify-center flex-shrink-0">
@@ -2174,16 +2166,17 @@ app.get('/kontakty', async (c) => {
     </div>
   </main>
 
-  ${getInnerPageFooter()}
+  ${getInnerPageFooter(settings)}
   `
   
-  return c.html(renderPage('Контакты', content, 'Контакты | YUSSIL', 
-    'Контакты компании YUSSIL. Телефон, email, адрес производства.', settings))
+  return c.html(renderPage('Контакты', content, `Контакты | ${siteName}`,
+    `Контакты компании ${siteName}. Телефон, email, адрес производства.`, settings, '/kontakty'))
 })
 
 app.get('/dostavka', async (c) => {
   const settings = c.get('settings')
-  
+  const siteName = settings.site_name || 'YUSSIL'
+
   const content = `
   ${getInnerPageHeader(settings, '/dostavka')}
 
@@ -2216,17 +2209,18 @@ app.get('/dostavka', async (c) => {
     </div>
   </main>
 
-  ${getInnerPageFooter()}
+  ${getInnerPageFooter(settings)}
   `
   
-  return c.html(renderPage('Доставка и оплата', content, 'Доставка и оплата | YUSSIL', 
-    'Условия доставки погрузочных рамп и эстакад по России. Оплата с НДС.', settings))
+  return c.html(renderPage('Доставка и оплата', content, `Доставка и оплата | ${siteName}`,
+    'Условия доставки погрузочных рамп и эстакад по России. Оплата с НДС.', settings, '/dostavka'))
 })
 
 // Cases page
 app.get('/kejsy', async (c) => {
   const settings = c.get('settings')
-  
+  const siteName = settings.site_name || 'YUSSIL'
+
   // Load cases
   let cases: any[] = []
   try {
@@ -2281,11 +2275,11 @@ app.get('/kejsy', async (c) => {
     </div>
   </main>
 
-  ${getInnerPageFooter()}
+  ${getInnerPageFooter(settings)}
   `
   
-  return c.html(renderPage('Кейсы', content, 'Наши кейсы | YUSSIL', 
-    'Реализованные проекты компании YUSSIL. Кейсы установки погрузочных рамп и эстакад для крупных компаний России.', settings))
+  return c.html(renderPage('Кейсы', content, `Наши кейсы | ${siteName}`,
+    `Реализованные проекты компании ${siteName}. Кейсы установки погрузочных рамп и эстакад для крупных компаний России.`, settings, '/kejsy'))
 })
 
 // Admin login page
@@ -2752,6 +2746,10 @@ app.get('/admin', async (c) => {
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">Основной телефон</label>
                 <input type="text" name="phone_main" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="+7 (800) 600-00-93">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Дополнительный телефон</label>
+                <input type="text" name="phone_secondary" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="+7 (900) 123-45-67">
               </div>
               <div>
                 <label class="block text-sm font-medium text-neutral-700 mb-2">WhatsApp</label>
