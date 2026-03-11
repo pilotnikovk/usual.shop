@@ -115,12 +115,15 @@ app.get('/sitemap.xml', async (c) => {
 
   let categories: any[] = []
   let products: any[] = []
+  let articles: any[] = []
   try { categories = await sql`SELECT slug, updated_at FROM categories WHERE is_active = 1` } catch (e) {}
   try { products = await sql`SELECT slug, updated_at FROM products WHERE is_active = 1` } catch (e) {}
+  try { articles = await sql`SELECT slug, updated_at FROM news WHERE is_published = 1` } catch (e) {}
 
   const staticUrls = [
     { path: '/', priority: '1.00' },
     { path: '/katalog', priority: '0.90' },
+    { path: '/blog', priority: '0.85' },
     { path: '/o-kompanii', priority: '0.70' },
     { path: '/kejsy', priority: '0.75' },
     { path: '/dostavka', priority: '0.65' },
@@ -135,6 +138,7 @@ app.get('/sitemap.xml', async (c) => {
   ${staticUrls.map(u => toUrl(u.path, u.priority)).join('\n  ')}
   ${categories.map(cat => toUrl(`/katalog/${cat.slug}`, '0.85', cat.updated_at ? new Date(cat.updated_at).toISOString().split('T')[0] : today)).join('\n  ')}
   ${products.map(p => toUrl(`/product/${p.slug}`, '0.80', p.updated_at ? new Date(p.updated_at).toISOString().split('T')[0] : today)).join('\n  ')}
+  ${articles.map(a => toUrl(`/blog/${a.slug}`, '0.75', a.updated_at ? new Date(a.updated_at).toISOString().split('T')[0] : today)).join('\n  ')}
 </urlset>`
 
   return c.text(xml, 200, { 'Content-Type': 'application/xml' })
@@ -1111,6 +1115,7 @@ app.get('/', async (c) => {
           <a href="/katalog" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Каталог</a>
           <a href="/o-kompanii" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">О компании</a>
           <a href="/kejsy" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Кейсы</a>
+          <a href="/blog" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Блог</a>
           <a href="/dostavka" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Доставка</a>
           <a href="/kontakty" class="px-4 py-2 rounded-lg text-neutral-600 hover:text-primary-600 hover:bg-primary-50 transition-all font-medium">Контакты</a>
         </div>
@@ -1145,6 +1150,7 @@ app.get('/', async (c) => {
           <a href="/katalog" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Каталог</a>
           <a href="/o-kompanii" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">О компании</a>
           <a href="/kejsy" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Кейсы</a>
+          <a href="/blog" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Блог</a>
           <a href="/dostavka" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Доставка</a>
           <a href="/kontakty" class="block px-4 py-3 rounded-lg text-neutral-600 hover:bg-neutral-50 font-medium">Контакты</a>
           <a href="#contact-form" class="block px-4 py-3 rounded-lg bg-accent-500 text-white text-center font-semibold mt-4">
@@ -1450,6 +1456,7 @@ app.get('/', async (c) => {
           <ul class="space-y-2 text-neutral-400 text-sm">
             <li><a href="/o-kompanii" class="hover:text-white transition-colors">О компании</a></li>
             <li><a href="/kejsy" class="hover:text-white transition-colors">Кейсы</a></li>
+            <li><a href="/blog" class="hover:text-white transition-colors">Блог и статьи</a></li>
             <li><a href="/dostavka" class="hover:text-white transition-colors">Доставка и оплата</a></li>
             <li><a href="/kontakty" class="hover:text-white transition-colors">Контакты</a></li>
           </ul>
@@ -1982,6 +1989,7 @@ const getInnerPageHeader = (settings: Record<string, string>, activePage: string
     { href: '/katalog', name: 'Каталог' },
     { href: '/o-kompanii', name: 'О компании' },
     { href: '/kejsy', name: 'Кейсы' },
+    { href: '/blog', name: 'Блог' },
     { href: '/dostavka', name: 'Доставка' },
     { href: '/kontakty', name: 'Контакты' }
   ]
@@ -2282,6 +2290,339 @@ app.get('/kejsy', async (c) => {
     `Реализованные проекты компании ${siteName}. Кейсы установки погрузочных рамп и эстакад для крупных компаний России.`, settings, '/kejsy'))
 })
 
+// ==========================================
+// BLOG / ARTICLES API
+// ==========================================
+
+// Public: get published articles (optionally by category)
+app.get('/api/articles', async (c) => {
+  const category = c.req.query('category') || ''
+  let articles: any[] = []
+  try {
+    if (category) {
+      articles = await sql`SELECT id, slug, title, excerpt, main_image, category, reading_time, published_at, author
+        FROM news WHERE is_published = 1 AND category = ${category} ORDER BY published_at DESC`
+    } else {
+      articles = await sql`SELECT id, slug, title, excerpt, main_image, category, reading_time, published_at, author
+        FROM news WHERE is_published = 1 ORDER BY published_at DESC`
+    }
+  } catch (e) {}
+  return c.json({ success: true, data: articles })
+})
+
+// Admin: get all articles
+app.get('/api/admin/articles', async (c) => {
+  let articles: any[] = []
+  try {
+    articles = await sql`SELECT id, slug, title, excerpt, category, reading_time, is_published, published_at, created_at
+      FROM news ORDER BY created_at DESC`
+  } catch (e) {}
+  return c.json({ success: true, data: articles })
+})
+
+// Admin: create article
+app.post('/api/admin/articles', async (c) => {
+  const body = await c.req.json()
+  const { slug, title, excerpt, content, main_image, seo_title, seo_description, author, category, reading_time, is_published } = body
+  if (!slug || !title) return c.json({ success: false, error: 'slug and title are required' }, 400)
+  try {
+    const published_at = is_published ? new Date().toISOString() : null
+    const result = await sql`
+      INSERT INTO news (slug, title, excerpt, content, main_image, seo_title, seo_description, author, category, reading_time, is_published, published_at)
+      VALUES (${slug}, ${title}, ${excerpt || ''}, ${content || ''}, ${main_image || ''}, ${seo_title || ''}, ${seo_description || ''}, ${author || 'USSIL'}, ${category || 'blog'}, ${reading_time || 5}, ${is_published ? 1 : 0}, ${published_at})
+      RETURNING id`
+    return c.json({ success: true, id: result[0]?.id })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500)
+  }
+})
+
+// Admin: update article
+app.put('/api/admin/articles/:id', async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  const { slug, title, excerpt, content, main_image, seo_title, seo_description, author, category, reading_time, is_published } = body
+  try {
+    const published_at = is_published ? new Date().toISOString() : null
+    await sql`
+      UPDATE news SET
+        slug = ${slug}, title = ${title}, excerpt = ${excerpt || ''}, content = ${content || ''},
+        main_image = ${main_image || ''}, seo_title = ${seo_title || ''}, seo_description = ${seo_description || ''},
+        author = ${author || 'USSIL'}, category = ${category || 'blog'}, reading_time = ${reading_time || 5},
+        is_published = ${is_published ? 1 : 0}, published_at = ${published_at}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}`
+    return c.json({ success: true })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500)
+  }
+})
+
+// Admin: delete article
+app.delete('/api/admin/articles/:id', async (c) => {
+  const id = c.req.param('id')
+  try {
+    await sql`DELETE FROM news WHERE id = ${id}`
+    return c.json({ success: true })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500)
+  }
+})
+
+// ==========================================
+// PUBLIC BLOG PAGES
+// ==========================================
+
+const BLOG_SECTIONS: Record<string, string> = {
+  'stati': 'Статьи',
+  'poleznye-materialy': 'Полезные материалы',
+  'blog': 'Блог'
+}
+
+app.get('/blog', async (c) => {
+  const settings = c.get('settings')
+  const siteName = settings.site_name || 'YUSSIL'
+  const activeCategory = c.req.query('razdel') || ''
+
+  let articles: any[] = []
+  try {
+    if (activeCategory) {
+      articles = await sql`SELECT id, slug, title, excerpt, main_image, category, reading_time, published_at, author
+        FROM news WHERE is_published = 1 AND category = ${activeCategory} ORDER BY published_at DESC`
+    } else {
+      articles = await sql`SELECT id, slug, title, excerpt, main_image, category, reading_time, published_at, author
+        FROM news WHERE is_published = 1 ORDER BY published_at DESC`
+    }
+  } catch (e) {}
+
+  const categoryLabels: Record<string, { label: string; color: string }> = {
+    'stati': { label: 'Статья', color: 'bg-blue-100 text-blue-700' },
+    'poleznye-materialy': { label: 'Полезный материал', color: 'bg-green-100 text-green-700' },
+    'blog': { label: 'Блог', color: 'bg-purple-100 text-purple-700' }
+  }
+
+  const content = `
+  ${getInnerPageHeader(settings, '/blog')}
+
+  <main class="py-8 lg:py-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+
+      <!-- Page header -->
+      <div class="mb-8 lg:mb-10">
+        <h1 class="text-3xl lg:text-4xl font-bold text-neutral-800 mb-3">Блог и полезные материалы</h1>
+        <p class="text-neutral-600 text-base lg:text-lg max-w-2xl">Экспертные статьи о выборе погрузочных рамп, организации склада и логистике от специалистов ${siteName}</p>
+      </div>
+
+      <!-- Section tabs -->
+      <div class="flex flex-wrap gap-2 mb-8">
+        <a href="/blog" class="px-5 py-2.5 rounded-xl font-medium text-sm transition-all ${!activeCategory ? 'bg-primary-600 text-white' : 'bg-white border border-neutral-200 text-neutral-600 hover:border-primary-400 hover:text-primary-600'}">Все материалы</a>
+        ${Object.entries(BLOG_SECTIONS).map(([key, label]) =>
+          `<a href="/blog?razdel=${key}" class="px-5 py-2.5 rounded-xl font-medium text-sm transition-all ${activeCategory === key ? 'bg-primary-600 text-white' : 'bg-white border border-neutral-200 text-neutral-600 hover:border-primary-400 hover:text-primary-600'}">${label}</a>`
+        ).join('')}
+      </div>
+
+      <!-- Articles grid -->
+      ${articles.length > 0 ? `
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
+        ${articles.map((a: any) => {
+          const cat = categoryLabels[a.category] || { label: a.category, color: 'bg-neutral-100 text-neutral-600' }
+          const dateStr = a.published_at ? new Date(a.published_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : ''
+          return `
+          <article class="group bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-neutral-100 flex flex-col">
+            ${a.main_image ? `
+            <a href="/blog/${a.slug}" class="block relative h-48 overflow-hidden">
+              <img src="${a.main_image}" alt="${a.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy">
+              <div class="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent"></div>
+            </a>` : `
+            <a href="/blog/${a.slug}" class="block relative h-48 bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center">
+              <i class="fas fa-newspaper text-5xl text-primary-300"></i>
+            </a>`}
+            <div class="p-5 lg:p-6 flex flex-col flex-1">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="px-2.5 py-1 rounded-lg text-xs font-medium ${cat.color}">${cat.label}</span>
+                ${a.reading_time ? `<span class="text-xs text-neutral-400"><i class="fas fa-clock mr-1"></i>${a.reading_time} мин</span>` : ''}
+              </div>
+              <h2 class="text-lg font-semibold text-neutral-800 mb-2 group-hover:text-primary-600 transition-colors">
+                <a href="/blog/${a.slug}">${a.title}</a>
+              </h2>
+              <p class="text-neutral-500 text-sm line-clamp-3 flex-1">${a.excerpt || ''}</p>
+              <div class="mt-4 flex items-center justify-between">
+                ${dateStr ? `<span class="text-xs text-neutral-400">${dateStr}</span>` : '<span></span>'}
+                <a href="/blog/${a.slug}" class="text-primary-600 hover:text-primary-700 font-medium text-sm flex items-center gap-1">
+                  Читать <i class="fas fa-arrow-right text-xs"></i>
+                </a>
+              </div>
+            </div>
+          </article>`
+        }).join('')}
+      </div>` : `
+      <div class="text-center py-16">
+        <div class="w-20 h-20 mx-auto bg-neutral-100 rounded-full flex items-center justify-center mb-6">
+          <i class="fas fa-newspaper text-3xl text-neutral-400"></i>
+        </div>
+        <h3 class="text-xl font-semibold text-neutral-800 mb-2">Статьи появятся здесь</h3>
+        <p class="text-neutral-500">Скоро мы добавим полезные материалы</p>
+      </div>`}
+
+    </div>
+  </main>
+
+  ${getInnerPageFooter(settings)}
+  `
+
+  const seoTitle = activeCategory
+    ? `${BLOG_SECTIONS[activeCategory] || activeCategory} | ${siteName}`
+    : `Блог и статьи о погрузочных рампах | ${siteName}`
+  const seoDesc = `Экспертные статьи и полезные материалы о выборе и эксплуатации погрузочных рамп, организации склада. Советы специалистов ${siteName}.`
+
+  return c.html(renderPage('Блог', content, seoTitle, seoDesc, settings, '/blog'))
+})
+
+app.get('/blog/:slug', async (c) => {
+  const settings = c.get('settings')
+  const siteName = settings.site_name || 'YUSSIL'
+  const slug = c.req.param('slug')
+
+  let article: any = null
+  let related: any[] = []
+  try {
+    const rows = await sql`SELECT * FROM news WHERE slug = ${slug} AND is_published = 1`
+    article = rows[0] || null
+    if (article) {
+      related = await sql`SELECT slug, title, main_image, category, reading_time FROM news
+        WHERE is_published = 1 AND id != ${article.id} AND category = ${article.category}
+        ORDER BY published_at DESC LIMIT 3`
+    }
+  } catch (e) {}
+
+  if (!article) {
+    return c.html(renderPage('Статья не найдена', `
+      ${getInnerPageHeader(settings, '/blog')}
+      <main class="py-20 text-center"><h1 class="text-2xl font-bold text-neutral-800 mb-4">Статья не найдена</h1>
+        <a href="/blog" class="text-primary-600 hover:underline">← Вернуться к блогу</a></main>
+      ${getInnerPageFooter(settings)}`, undefined, undefined, settings, `/blog/${slug}`), 404)
+  }
+
+  const categoryLabels: Record<string, { label: string; color: string }> = {
+    'stati': { label: 'Статья', color: 'bg-blue-100 text-blue-700' },
+    'poleznye-materialy': { label: 'Полезный материал', color: 'bg-green-100 text-green-700' },
+    'blog': { label: 'Блог', color: 'bg-purple-100 text-purple-700' }
+  }
+  const cat = categoryLabels[article.category] || { label: article.category, color: 'bg-neutral-100 text-neutral-600' }
+  const dateStr = article.published_at ? new Date(article.published_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : ''
+
+  const articleSchema = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    'headline': article.title,
+    'description': article.excerpt || article.seo_description || '',
+    'image': article.main_image || '',
+    'author': { '@type': 'Organization', 'name': siteName },
+    'publisher': { '@type': 'Organization', 'name': siteName },
+    'datePublished': article.published_at || article.created_at,
+    'dateModified': article.updated_at || article.created_at,
+    'mainEntityOfPage': { '@type': 'WebPage', '@id': `${settings.site_url || 'https://ussil.ru'}/blog/${slug}` }
+  })
+
+  const content = `
+  ${getInnerPageHeader(settings, '/blog')}
+
+  <main class="py-8 lg:py-12">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6">
+
+      <!-- Breadcrumbs -->
+      <nav class="flex items-center gap-2 text-sm text-neutral-500 mb-6" aria-label="Хлебные крошки">
+        <a href="/" class="hover:text-primary-600">Главная</a>
+        <i class="fas fa-chevron-right text-xs"></i>
+        <a href="/blog" class="hover:text-primary-600">Блог</a>
+        <i class="fas fa-chevron-right text-xs"></i>
+        <a href="/blog?razdel=${article.category}" class="hover:text-primary-600">${BLOG_SECTIONS[article.category] || article.category}</a>
+        <i class="fas fa-chevron-right text-xs"></i>
+        <span class="text-neutral-800 truncate max-w-xs">${article.title}</span>
+      </nav>
+
+      <!-- Article header -->
+      <header class="mb-8">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="px-3 py-1 rounded-lg text-sm font-medium ${cat.color}">${cat.label}</span>
+          ${article.reading_time ? `<span class="text-sm text-neutral-400"><i class="fas fa-clock mr-1"></i>${article.reading_time} мин чтения</span>` : ''}
+          ${dateStr ? `<span class="text-sm text-neutral-400"><i class="fas fa-calendar mr-1"></i>${dateStr}</span>` : ''}
+        </div>
+        <h1 class="text-3xl lg:text-4xl font-bold text-neutral-800 leading-tight mb-4">${article.title}</h1>
+        ${article.excerpt ? `<p class="text-xl text-neutral-600 leading-relaxed">${article.excerpt}</p>` : ''}
+      </header>
+
+      <!-- Main image -->
+      ${article.main_image ? `
+      <div class="rounded-2xl overflow-hidden mb-8 lg:mb-10 shadow-md">
+        <img src="${article.main_image}" alt="${article.title}" class="w-full h-64 lg:h-96 object-cover">
+      </div>` : ''}
+
+      <!-- Article content -->
+      <div class="prose prose-lg max-w-none text-neutral-700 leading-relaxed
+        [&_h2]:text-2xl [&_h2]:font-bold [&_h2]:text-neutral-800 [&_h2]:mt-10 [&_h2]:mb-4
+        [&_h3]:text-xl [&_h3]:font-semibold [&_h3]:text-neutral-800 [&_h3]:mt-8 [&_h3]:mb-3
+        [&_p]:mb-5 [&_ul]:mb-5 [&_ol]:mb-5 [&_li]:mb-1.5
+        [&_ul]:pl-6 [&_ol]:pl-6 [&_li]:list-disc [&_ol_li]:list-decimal
+        [&_strong]:font-semibold [&_strong]:text-neutral-800
+        [&_blockquote]:border-l-4 [&_blockquote]:border-primary-400 [&_blockquote]:pl-5 [&_blockquote]:italic [&_blockquote]:text-neutral-600 [&_blockquote]:my-6
+        [&_table]:w-full [&_table]:border-collapse [&_th]:bg-neutral-100 [&_th]:p-3 [&_th]:text-left [&_td]:border [&_td]:border-neutral-200 [&_td]:p-3">
+        ${article.content || ''}
+      </div>
+
+      <!-- Share & back -->
+      <div class="mt-10 pt-6 border-t border-neutral-200 flex flex-wrap items-center justify-between gap-4">
+        <a href="/blog" class="flex items-center gap-2 text-primary-600 hover:text-primary-700 font-medium">
+          <i class="fas fa-arrow-left"></i> Все материалы
+        </a>
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-neutral-500">Поделиться:</span>
+          <a href="https://t.me/share/url?url=${encodeURIComponent((settings.site_url || 'https://ussil.ru') + '/blog/' + slug)}&text=${encodeURIComponent(article.title)}" target="_blank" class="w-9 h-9 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors">
+            <i class="fab fa-telegram"></i>
+          </a>
+          <a href="https://wa.me/?text=${encodeURIComponent(article.title + ' ' + (settings.site_url || 'https://ussil.ru') + '/blog/' + slug)}" target="_blank" class="w-9 h-9 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 flex items-center justify-center transition-colors">
+            <i class="fab fa-whatsapp"></i>
+          </a>
+        </div>
+      </div>
+
+      <!-- Related articles -->
+      ${related.length > 0 ? `
+      <div class="mt-12">
+        <h2 class="text-xl font-bold text-neutral-800 mb-6">Читайте также</h2>
+        <div class="grid sm:grid-cols-3 gap-4">
+          ${related.map((r: any) => `
+          <a href="/blog/${r.slug}" class="group bg-white rounded-xl overflow-hidden shadow-sm hover:shadow-md border border-neutral-100 transition-all flex flex-col">
+            ${r.main_image ? `<div class="h-32 overflow-hidden"><img src="${r.main_image}" alt="${r.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"></div>` : `<div class="h-32 bg-primary-50 flex items-center justify-center"><i class="fas fa-newspaper text-3xl text-primary-300"></i></div>`}
+            <div class="p-4">
+              <h3 class="text-sm font-semibold text-neutral-800 group-hover:text-primary-600 transition-colors line-clamp-2">${r.title}</h3>
+              ${r.reading_time ? `<span class="text-xs text-neutral-400 mt-1 block"><i class="fas fa-clock mr-1"></i>${r.reading_time} мин</span>` : ''}
+            </div>
+          </a>`).join('')}
+        </div>
+      </div>` : ''}
+
+      <!-- CTA -->
+      <div class="mt-12 p-6 lg:p-8 bg-gradient-to-r from-primary-600 to-primary-700 rounded-2xl text-white text-center">
+        <h3 class="text-xl lg:text-2xl font-bold mb-2">Нужна консультация по рампам?</h3>
+        <p class="text-primary-100 mb-6">Бесплатно поможем подобрать оптимальное решение для вашего склада</p>
+        <a href="/kontakty" class="inline-flex items-center gap-2 px-6 py-3 bg-white text-primary-600 font-semibold rounded-xl hover:bg-primary-50 transition-colors">
+          <i class="fas fa-phone"></i> Получить консультацию
+        </a>
+      </div>
+
+    </div>
+  </main>
+
+  <script type="application/ld+json">${articleSchema}</script>
+  ${getInnerPageFooter(settings)}
+  `
+
+  const seoTitle = article.seo_title || `${article.title} | ${siteName}`
+  const seoDesc = article.seo_description || article.excerpt || `Читайте статью "${article.title}" от экспертов ${siteName}. Полезные советы по выбору погрузочных рамп и организации склада.`
+
+  return c.html(renderPage(article.title, content, seoTitle, seoDesc, settings, `/blog/${slug}`))
+})
+
 // Admin login page
 app.get('/admin/login', async (c) => {
   return c.html(`<!DOCTYPE html>
@@ -2456,6 +2797,9 @@ app.get('/admin', async (c) => {
         </a>
         <a href="#leads" onclick="showSection('leads')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
           <i class="fas fa-envelope w-5"></i> Заявки
+        </a>
+        <a href="#articles" onclick="showSection('articles')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
+          <i class="fas fa-newspaper w-5"></i> Блог / Статьи
         </a>
         <a href="#settings" onclick="showSection('settings')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 hover:bg-neutral-50 transition-colors">
           <i class="fas fa-cog w-5"></i> Настройки сайта
@@ -2691,6 +3035,108 @@ app.get('/admin', async (c) => {
           </table>
         </div>
       </section>
+
+      <!-- Articles / Blog Section -->
+      <section id="section-articles" class="admin-section hidden">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold text-neutral-800">Блог / Статьи</h2>
+          <button onclick="openArticleModal()" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors flex items-center gap-2">
+            <i class="fas fa-plus"></i> Добавить статью
+          </button>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-neutral-100 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-neutral-50 border-b border-neutral-100">
+              <tr>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Заголовок</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Раздел</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Время чтения</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Статус</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Дата</th>
+                <th class="px-6 py-4 text-left text-sm text-neutral-500 font-medium">Действия</th>
+              </tr>
+            </thead>
+            <tbody id="articles-table" class="divide-y divide-neutral-100"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Article Modal -->
+      <div id="articleModal" class="modal fixed inset-0 z-50 flex items-center justify-center p-4 hidden" style="background:rgba(0,0,0,0.5)">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+          <div class="flex items-center justify-between p-6 border-b border-neutral-100">
+            <h3 id="articleModalTitle" class="text-xl font-bold text-neutral-800">Добавить статью</h3>
+            <button onclick="closeArticleModal()" class="w-8 h-8 rounded-lg bg-neutral-100 hover:bg-neutral-200 flex items-center justify-center">
+              <i class="fas fa-times text-neutral-600"></i>
+            </button>
+          </div>
+          <form id="articleForm" class="p-6 space-y-5">
+            <input type="hidden" id="articleId">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Заголовок *</label>
+                <input type="text" name="title" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Как выбрать рампу">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Slug (URL) *</label>
+                <input type="text" name="slug" required class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="kak-vybrat-rampu">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Раздел</label>
+                <select name="category" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200">
+                  <option value="stati">Статьи</option>
+                  <option value="poleznye-materialy">Полезные материалы</option>
+                  <option value="blog">Блог</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Время чтения (мин)</label>
+                <input type="number" name="reading_time" min="1" max="60" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="5">
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-neutral-700 mb-2">Краткое описание (excerpt)</label>
+              <textarea name="excerpt" rows="2" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="Краткое описание для карточки статьи..."></textarea>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-neutral-700 mb-2">Основное изображение (URL)</label>
+              <input type="text" name="main_image" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="https://...">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-neutral-700 mb-2">Содержимое статьи (HTML)</label>
+              <textarea name="content" rows="10" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 font-mono text-sm" placeholder="<h2>Заголовок</h2><p>Текст статьи...</p>"></textarea>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-neutral-100">
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">SEO Title</label>
+                <input type="text" name="seo_title" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="SEO заголовок">
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-700 mb-2">Автор</label>
+                <input type="text" name="author" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="USSIL">
+              </div>
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-neutral-700 mb-2">SEO Description</label>
+                <textarea name="seo_description" rows="2" class="w-full px-4 py-3 rounded-xl border border-neutral-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200" placeholder="SEO описание статьи..."></textarea>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" name="is_published" class="w-4 h-4 rounded accent-blue-600">
+                <span class="text-sm font-medium text-neutral-700">Опубликовать</span>
+              </label>
+            </div>
+            <div class="flex gap-3 pt-2">
+              <button type="submit" class="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors">
+                <i class="fas fa-save mr-2"></i>Сохранить
+              </button>
+              <button type="button" onclick="closeArticleModal()" class="px-6 py-3 border border-neutral-200 rounded-xl text-neutral-600 hover:bg-neutral-50">
+                Отмена
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
 
       <!-- Settings Section -->
       <section id="section-settings" class="admin-section hidden">
@@ -3373,6 +3819,7 @@ app.get('/admin', async (c) => {
       
       if (section === 'categories') loadCategories();
       if (section === 'popular') loadPopularSection();
+      if (section === 'articles') loadArticles();
     }
 
     function showSettingsTab(tab) {
@@ -3660,6 +4107,128 @@ app.get('/admin', async (c) => {
         alert('Ошибка сохранения настроек');
       }
     });
+
+    // ==========================================
+    // Articles / Blog
+    // ==========================================
+    const categoryNames = { 'stati': 'Статьи', 'poleznye-materialy': 'Полезные материалы', 'blog': 'Блог' };
+
+    async function loadArticles() {
+      const response = await fetch('/api/admin/articles');
+      const data = await response.json();
+      document.getElementById('articles-table').innerHTML = (data.data || []).map(a =>
+        '<tr class="hover:bg-neutral-50">' +
+          '<td class="px-6 py-4 font-medium text-neutral-800 max-w-xs">' +
+            '<div>' + a.title + '</div>' +
+            '<div class="text-xs text-neutral-400 mt-0.5">/blog/' + a.slug + '</div>' +
+          '</td>' +
+          '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700">' + (categoryNames[a.category] || a.category) + '</span></td>' +
+          '<td class="px-6 py-4 text-sm text-neutral-500">' + (a.reading_time || '—') + ' мин</td>' +
+          '<td class="px-6 py-4">' +
+            (a.is_published ? '<span class="px-2 py-1 rounded-lg text-xs font-medium bg-green-50 text-green-700">Опубликовано</span>' : '<span class="px-2 py-1 rounded-lg text-xs font-medium bg-neutral-100 text-neutral-500">Черновик</span>') +
+          '</td>' +
+          '<td class="px-6 py-4 text-sm text-neutral-500">' + (a.created_at ? new Date(a.created_at).toLocaleDateString("ru-RU") : "—") + "</td>" +
+          '<td class="px-6 py-4"><div class="flex gap-2">' +
+            '<a href="/blog/' + a.slug + '" target="_blank" class="w-9 h-9 rounded-lg bg-neutral-50 hover:bg-neutral-100 text-neutral-600 flex items-center justify-center transition-colors" title="Просмотр"><i class="fas fa-eye"></i></a>' +
+            '<button onclick="editArticle(' + a.id + ')" class="w-9 h-9 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 flex items-center justify-center transition-colors"><i class="fas fa-edit"></i></button>' +
+            '<button onclick="deleteArticle(' + a.id + ')" class="w-9 h-9 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 flex items-center justify-center transition-colors"><i class="fas fa-trash"></i></button>' +
+          '</div></td></tr>'
+      ).join('') || '<tr><td colspan="6" class="px-6 py-8 text-center text-neutral-500">Статей нет</td></tr>';
+    }
+
+    let allArticlesCache = [];
+
+    function openArticleModal(article = null) {
+      const modal = document.getElementById('articleModal');
+      const form = document.getElementById('articleForm');
+      document.getElementById('articleModalTitle').textContent = article ? 'Редактировать статью' : 'Добавить статью';
+      form.reset();
+      document.getElementById('articleId').value = '';
+      if (article) {
+        document.getElementById('articleId').value = article.id;
+        form.title.value = article.title || '';
+        form.slug.value = article.slug || '';
+        form.category.value = article.category || 'blog';
+        form.reading_time.value = article.reading_time || '';
+        form.excerpt.value = article.excerpt || '';
+        form.main_image.value = article.main_image || '';
+        form.content.value = article.content || '';
+        form.seo_title.value = article.seo_title || '';
+        form.seo_description.value = article.seo_description || '';
+        form.author.value = article.author || '';
+        form.is_published.checked = !!article.is_published;
+      }
+      modal.classList.remove('hidden');
+    }
+
+    function closeArticleModal() {
+      document.getElementById('articleModal').classList.add('hidden');
+    }
+
+    async function editArticle(id) {
+      if (!allArticlesCache.length) {
+        const r = await fetch('/api/admin/articles');
+        const d = await r.json();
+        allArticlesCache = d.data || [];
+      }
+      const article = allArticlesCache.find(a => a.id === id);
+      if (article) openArticleModal(article);
+    }
+
+    async function deleteArticle(id) {
+      if (!confirm('Удалить статью?')) return;
+      const token = localStorage.getItem('adminToken');
+      await fetch('/api/admin/articles/' + id, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token } });
+      allArticlesCache = [];
+      loadArticles();
+      showToast('Статья удалена', 'success');
+    }
+
+    document.getElementById('articleForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const id = document.getElementById('articleId').value;
+      const token = localStorage.getItem('adminToken');
+      const body = {
+        title: form.title.value,
+        slug: form.slug.value,
+        category: form.category.value,
+        reading_time: parseInt(form.reading_time.value) || 5,
+        excerpt: form.excerpt.value,
+        main_image: form.main_image.value,
+        content: form.content.value,
+        seo_title: form.seo_title.value,
+        seo_description: form.seo_description.value,
+        author: form.author.value || 'USSIL',
+        is_published: form.is_published.checked
+      };
+      const url = id ? '/api/admin/articles/' + id : '/api/admin/articles';
+      const method = id ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.success) {
+        closeArticleModal();
+        allArticlesCache = [];
+        loadArticles();
+        showToast(id ? 'Статья обновлена!' : 'Статья создана!', 'success');
+      } else {
+        showToast('Ошибка: ' + (data.error || ''), 'error');
+      }
+    });
+
+    // Auto-slug from title (transliteration)
+    (function() {
+      const tr = {а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'yo',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'kh',ц:'ts',ч:'ch',ш:'sh',щ:'shch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+      const titleInput = document.querySelector('#articleForm [name="title"]');
+      const slugInput = document.querySelector('#articleForm [name="slug"]');
+      if (titleInput && slugInput) {
+        titleInput.addEventListener('input', function() {
+          if (slugInput.dataset.manual) return;
+          slugInput.value = this.value.toLowerCase().split('').map(c => tr[c] !== undefined ? tr[c] : c).join('').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        });
+        slugInput.addEventListener('input', function() { this.dataset.manual = this.value ? '1' : ''; });
+      }
+    })();
 
     // Product Modal
     function openProductModal(product = null) {
@@ -4313,6 +4882,271 @@ app.get('/admin', async (c) => {
 </body>
 </html>`)
 })
+
+// ==========================================
+// BLOG SEED DATA
+// ==========================================
+const SEED_ARTICLES = [
+  {
+    slug: 'kak-vybrat-mobilnuyu-pogruzochnuyu-rampu',
+    title: 'Как выбрать мобильную погрузочную рампу',
+    category: 'stati',
+    reading_time: 7,
+    excerpt: 'Разбираем ключевые параметры при выборе мобильной рампы: грузоподъёмность, длина, ширина и материал. Практические советы для склада любого типа.',
+    seo_title: 'Как выбрать мобильную погрузочную рампу — советы экспертов | USSIL',
+    seo_description: 'Практическое руководство по выбору мобильной погрузочной рампы. Грузоподъёмность, длина, ширина, материал — на что обращать внимание при покупке.',
+    author: 'USSIL',
+    content: `<h2>Почему важно правильно выбрать рампу</h2>
+<p>Мобильная погрузочная рампа — ключевой элемент складской логистики. Неправильный выбор приводит к простоям, травмам персонала и повреждению грузов. Разберём параметры, на которые стоит обратить внимание в первую очередь.</p>
+
+<h2>Грузоподъёмность</h2>
+<p>Первый и самый важный параметр. Определяется суммарным весом груза <strong>вместе с погрузчиком или рохлей</strong>. Если вы работаете с электропогрузчиком весом 2 500 кг и паллетой в 1 000 кг — вам нужна рампа на <strong>минимум 4 500 кг</strong> (с запасом 25–30%).</p>
+<ul>
+  <li>Для ручных гидравлических тележек (рохль): 2 000–3 000 кг</li>
+  <li>Для электрических тележек: 3 000–5 000 кг</li>
+  <li>Для вилочных погрузчиков: 5 000–10 000 кг и выше</li>
+</ul>
+
+<h2>Длина рампы</h2>
+<p>Длина определяет угол наклона при заданной высоте кузова. Чем длиннее рампа — тем <strong>меньше угол</strong> и легче работать персоналу. Золотое правило: угол не должен превышать 12–14°. При высоте кузова 1,2 м оптимальная длина рабочей части — от 2,5 до 3,5 м.</p>
+
+<h2>Ширина рабочей поверхности</h2>
+<p>Ширина должна соответствовать ширине используемой техники. Стандартные значения:</p>
+<ul>
+  <li>Для рохли: от 750 мм</li>
+  <li>Для электротележки: от 900 мм</li>
+  <li>Для погрузчика: от 1 200 мм</li>
+</ul>
+
+<h2>Материал и покрытие</h2>
+<p>Рампы изготавливают из стали или алюминия. <strong>Стальные</strong> — тяжелее, но дешевле и надёжнее при интенсивных нагрузках. <strong>Алюминиевые</strong> — легче (проще перемещать), устойчивы к коррозии, но дороже.</p>
+<p>Рабочая поверхность должна иметь антискользящее покрытие (перфорация, рифление или резиновые накладки) — это требование безопасности.</p>
+
+<h2>Крепление к автомобилю</h2>
+<p>Мобильные рампы крепятся к бамперу или порогу кузова с помощью крюков или цепей. Проверьте, что система крепления совместима с вашим автопарком. При работе с разными типами машин выбирайте рампу с <strong>регулируемой системой фиксации</strong>.</p>
+
+<h2>Итоговый чек-лист</h2>
+<ul>
+  <li>Определите максимальный суммарный вес (груз + техника) с запасом 30%</li>
+  <li>Измерьте высоту кузова ваших автомобилей</li>
+  <li>Убедитесь, что ширина рампы шире вашей техники на 10–15 см с каждой стороны</li>
+  <li>Выберите материал исходя из частоты использования и условий хранения</li>
+  <li>Проверьте наличие сертификата соответствия ГОСТ</li>
+</ul>`
+  },
+  {
+    slug: 'kakaya-rampa-dlya-rokhli',
+    title: 'Какая рампа подходит для рохли',
+    category: 'stati',
+    reading_time: 5,
+    excerpt: 'Гидравлическая тележка (рохля) — самый распространённый складской транспорт. Выбираем рампу под неё правильно: угол, ширина, грузоподъёмность.',
+    seo_title: 'Какая рампа подходит для рохли (гидравлической тележки) | USSIL',
+    seo_description: 'Как выбрать погрузочную рампу для работы с рохлей. Оптимальные параметры угла наклона, ширины и грузоподъёмности для гидравлических тележек.',
+    author: 'USSIL',
+    content: `<h2>Особенности работы рохли на рампе</h2>
+<p>Гидравлическая ручная тележка (рохля) — самый распространённый инструмент для внутрискладских перемещений. При работе с рампой есть ряд специфических требований, которые отличают её от работы с электрическим погрузчиком.</p>
+
+<h2>Угол наклона — критически важный параметр</h2>
+<p>С рохлей работает человек вручную. Чем круче подъём — тем тяжелее тянуть груз и выше риск ДТП. Максимально допустимый угол при ручной тяге — <strong>не более 10°</strong>. При высоте кузова 1 м это означает длину рабочей части не менее 2,5–3 м.</p>
+<blockquote>Рекомендуем: при высоте борта более 1,2 м выбирайте рампу длиной от 3,5 м — это обеспечит комфортный угол в 8–9°.</blockquote>
+
+<h2>Ширина рабочей поверхности</h2>
+<p>Стандартная рохля имеет ширину вил 520–685 мм. Ширина рампы должна обеспечивать <strong>свободный проезд с зазором 5–10 см с каждой стороны</strong>. Оптимальная ширина рабочей поверхности — от 750 до 900 мм.</p>
+
+<h2>Грузоподъёмность</h2>
+<p>Стандартная рохля выдерживает 2 000–2 500 кг. Рампа должна иметь запас прочности: выбирайте модели на <strong>3 000 кг</strong> — этого достаточно для большинства задач.</p>
+
+<h2>Тип поверхности</h2>
+<p>Для рохли критична поверхность рампы: мелкие вилы могут застрять в крупной перфорации. Лучший вариант — <strong>рифлёная сталь</strong> или перфорация с мелкими ячейками (до 30×30 мм). Это обеспечивает и сцепление, и свободный проезд вил.</p>
+
+<h2>Нужны ли бортики?</h2>
+<p>Да. Бортики (боковые ограничители) предотвращают соскальзывание рохли в сторону. Высота бортика — минимум 50 мм. Для узких рамп или при работе с тяжёлыми грузами рекомендуем бортики высотой 80–100 мм.</p>`
+  },
+  {
+    slug: 'rampa-dlya-gazeli',
+    title: 'Рампа для газели: что учитывать',
+    category: 'stati',
+    reading_time: 6,
+    excerpt: 'Газель — самый популярный малотоннажный грузовик. Разбираем, какая рампа оптимальна для работы с этим автомобилем: высота кузова, угол, крепление.',
+    seo_title: 'Рампа для Газели: как выбрать погрузочную рампу для малотоннажки | USSIL',
+    seo_description: 'Подбор погрузочной рампы для Газели. Высота кузова, оптимальная длина и ширина, система крепления. Практические рекомендации от производителя.',
+    author: 'USSIL',
+    content: `<h2>Параметры кузова Газели</h2>
+<p>Газель (ГАЗ-3302 и аналоги) — наиболее массовый малотоннажный автомобиль в России. Основные параметры кузова, важные для выбора рампы:</p>
+<ul>
+  <li>Высота пола кузова от земли: <strong>900–1 050 мм</strong> (зависит от модификации и нагрузки)</li>
+  <li>Ширина проёма: 1 600–1 800 мм (борт-тент) или 2 000 мм (изотермический)</li>
+  <li>Грузоподъёмность: 1 500–2 000 кг</li>
+</ul>
+
+<h2>Оптимальная длина рампы</h2>
+<p>При высоте кузова 1 м и допустимом угле 10° оптимальная длина рабочей части — <strong>2,5–3,0 м</strong>. Для тяжёлых грузов или работы с электрическими тележками берите 3,0–3,5 м.</p>
+
+<h2>Ширина рампы</h2>
+<p>Для Газели обычно используют одну рампу шириной 600–900 мм (для рохли или тачки) или две узкие рампы под вилочный погрузчик. При работе вручную одной широкой рампы достаточно.</p>
+
+<h2>Крепление — самый важный момент</h2>
+<p>У Газели нет специального фаркопа для крепления рампы. Используются два способа:</p>
+<ul>
+  <li><strong>Крюки за задний бампер</strong> — самый распространённый вариант. Убедитесь, что бампер выдержит нагрузку (иногда требуется усиление).</li>
+  <li><strong>Цепи за раму кузова</strong> — надёжнее, но требует доработки: сварка петель к раме.</li>
+</ul>
+<p>Важно: рампа не должна скользить вбок. Предусмотрите упоры или цепи-растяжки по бокам.</p>
+
+<h2>Мобильная или стационарная?</h2>
+<p>Для Газели, которая работает на разных площадках, однозначно нужна <strong>мобильная складная рампа</strong>. Стационарные эстакады оправданы только при разгрузке на одном фиксированном складе ежедневно.</p>
+
+<h2>Нюансы зимней эксплуатации</h2>
+<p>При работе в мороз металл становится скользким. Обязательно выбирайте рампу с <strong>антискользящим покрытием</strong> рабочей поверхности. Перфорированный настил справляется лучше гладкого, но хуже резиновых накладок — выбирайте исходя из условий работы.</p>`
+  },
+  {
+    slug: 'kak-uskorit-razgruzku-sklada',
+    title: 'Как ускорить разгрузку склада',
+    category: 'poleznye-materialy',
+    reading_time: 8,
+    excerpt: 'Практические методы увеличения скорости разгрузки: от правильного подбора оборудования до организации рабочих процессов. Реальные кейсы и цифры.',
+    seo_title: 'Как ускорить разгрузку склада: 7 практических способов | USSIL',
+    seo_description: 'Семь проверенных методов ускорения разгрузочных операций на складе. Оборудование, логистика, персонал — комплексный подход к повышению производительности.',
+    author: 'USSIL',
+    content: `<h2>Почему скорость разгрузки важна</h2>
+<p>Каждый час простоя автомобиля у склада стоит денег — штрафы за сверхнормативное время, потери в логистике, недовольство водителей. В крупных распределительных центрах разгрузка одной фуры занимает от 30 минут до 4 часов. Разница — в организации и оборудовании.</p>
+
+<h2>1. Правильная рампа под конкретный автопарк</h2>
+<p>Универсальная рампа «для всех» — не лучший выбор. Если 80% вашего автопарка — фуры высотой 1,2–1,4 м, закупите рампы под этот стандарт. Сотрудники не будут терять время на подгонку и перестановку.</p>
+
+<h2>2. Достаточное количество точек разгрузки</h2>
+<p>Узкое место большинства складов — одни ворота на всё. Если позволяет площадь, оборудуйте 2–3 разгрузочных поста. Инвестиции окупаются при объёме от 5–10 машин в день.</p>
+
+<h2>3. Пандус вместо временной рампы</h2>
+<p>Стационарный пандус или эстакада позволяет начинать разгрузку сразу после постановки машины, без установки съёмной рампы. Экономия — 5–10 минут на каждую машину, что при 20 машинах в день даёт <strong>100–200 минут рабочего времени ежедневно</strong>.</p>
+
+<h2>4. Электрические тележки вместо ручных</h2>
+<p>Замена ручных рохль на электрические штабелёры или тягачи ускоряет перемещение груза в 2–3 раза. Электрическая тележка не устаёт, не нуждается в перекурах, точнее управляется.</p>
+
+<h2>5. Зонирование склада</h2>
+<p>Груз должен попадать на своё место напрямую, а не через всю площадь склада. Разделите склад на зоны по типам товара и заранее расчистите пути от ворот до нужных стеллажей перед приходом машины.</p>
+
+<h2>6. Предварительное уведомление и подготовка</h2>
+<p>Водитель должен уведомить склад за 1–2 часа до прибытия. За это время:</p>
+<ul>
+  <li>Освобождается нужный пост</li>
+  <li>Готовится приёмная документация</li>
+  <li>Назначается бригада</li>
+  <li>Расчищается место в зоне хранения</li>
+</ul>
+
+<h2>7. Стандартизация паллет и тары</h2>
+<p>Нестандартная тара — главный замедлитель разгрузки. По возможности договоритесь с поставщиками об использовании стандартных EUR-паллет (1 200×800 мм). Это ускорит работу вилочных погрузчиков в 1,5–2 раза.</p>
+
+<h2>Итог</h2>
+<p>Комплексный подход — единственный способ кардинально ускорить разгрузку. Даже одно улучшение (например, установка рампы вместо временных настилов) даёт заметный результат. Начните с аудита текущего процесса и устраните самое узкое место.</p>`
+  },
+  {
+    slug: 'estakada-ili-mobilnaya-rampa',
+    title: 'Эстакада или мобильная рампа: что выбрать',
+    category: 'poleznye-materialy',
+    reading_time: 7,
+    excerpt: 'Сравниваем два подхода к организации погрузочно-разгрузочных работ. Когда оправдана стационарная эстакада, а когда мобильная рампа — экономически выгоднее.',
+    seo_title: 'Эстакада или мобильная рампа — что выбрать для склада | USSIL',
+    seo_description: 'Сравнение стационарных эстакад и мобильных погрузочных рамп. Стоимость, монтаж, удобство эксплуатации — выбираем оптимальное решение для вашего склада.',
+    author: 'USSIL',
+    content: `<h2>В чём принципиальное отличие</h2>
+<p><strong>Стационарная эстакада</strong> — это бетонный или металлический помост, встроенный в инфраструктуру склада. Она фиксирована на одном месте и требует строительных работ. <strong>Мобильная рампа</strong> — переносное устройство, которое устанавливается к автомобилю и убирается по завершении работы.</p>
+
+<h2>Когда выбирать эстакаду</h2>
+<p>Эстакада оправдана, если:</p>
+<ul>
+  <li>Склад принимает 10+ машин ежедневно на одном посту</li>
+  <li>Высота кузова всех автомобилей стандартная и не меняется</li>
+  <li>Есть возможность строительства (собственное или долгосрочно арендованное здание)</li>
+  <li>Используются тяжёлые погрузчики с высокой нагрузкой на настил</li>
+  <li>Бюджет позволяет вложение от 500 тыс. руб. и выше</li>
+</ul>
+
+<h2>Когда выбирать мобильную рампу</h2>
+<p>Мобильная рампа лучше, если:</p>
+<ul>
+  <li>Склад арендованный или временный</li>
+  <li>Автопарк разнотипный (разные высоты кузовов)</li>
+  <li>Разгрузка ведётся на улице или в разных точках территории</li>
+  <li>Нужно быстрое решение без строительства</li>
+  <li>Бюджет ограничен (мобильная рампа стоит от 30 до 150 тыс. руб.)</li>
+</ul>
+
+<h2>Сравнительная таблица</h2>
+<table>
+  <thead><tr><th>Критерий</th><th>Эстакада</th><th>Мобильная рампа</th></tr></thead>
+  <tbody>
+    <tr><td>Стоимость</td><td>500 000 – 3 000 000 руб.</td><td>30 000 – 150 000 руб.</td></tr>
+    <tr><td>Монтаж</td><td>Недели, строительные работы</td><td>Несколько часов</td></tr>
+    <tr><td>Гибкость</td><td>Нет</td><td>Высокая</td></tr>
+    <tr><td>Обслуживание</td><td>Раз в несколько лет</td><td>Осмотр перед каждым применением</td></tr>
+    <tr><td>Срок службы</td><td>20–50 лет</td><td>10–15 лет</td></tr>
+    <tr><td>Производительность</td><td>Выше (нет времени на установку)</td><td>Незначительно ниже</td></tr>
+  </tbody>
+</table>
+
+<h2>Комбинированный подход</h2>
+<p>Оптимальное решение для многих складов — <strong>стационарная эстакада на основном посту</strong> (где постоянно работают фуры) и <strong>мобильные рампы для остальных задач</strong> (малотоннажные машины, работа на улице, второй пост). Такая комбинация даёт максимальную гибкость при разумных затратах.</p>
+
+<h2>Наш совет</h2>
+<p>Если вы не уверены в стабильности объёмов или арендуете помещение — начните с мобильной рампы. При росте бизнеса и стабилизации потоков можно рассмотреть строительство эстакады.</p>`
+  },
+  {
+    slug: 'oshibki-pri-vybore-skladskoy-rampy',
+    title: 'Ошибки при выборе складской рампы',
+    category: 'blog',
+    reading_time: 6,
+    excerpt: '6 типичных ошибок, которые совершают при покупке погрузочной рампы. Разбираем реальные случаи и объясняем, как их избежать.',
+    seo_title: '6 ошибок при выборе складской рампы — как их избежать | USSIL',
+    seo_description: 'Топ-6 ошибок при выборе погрузочной рампы для склада. Реальные примеры и советы специалистов компании USSIL — производителя рамп с 2010 года.',
+    author: 'USSIL',
+    content: `<h2>Ошибка 1: Занижение грузоподъёмности</h2>
+<p>Самая распространённая ошибка — выбор рампы «впритык» к текущей нагрузке без запаса. Клиент видит в спецификации «грузоподъёмность 3 000 кг» и думает: «Нам хватит, у нас паллеты по 800 кг». Но забывает прибавить вес рохли (75–120 кг), вес оператора (80–100 кг) и динамические нагрузки при движении.</p>
+<p><strong>Правило:</strong> берите рампу с запасом минимум 25–30% от расчётной нагрузки.</p>
+
+<h2>Ошибка 2: Неверная длина рампы</h2>
+<p>Слишком короткая рампа даёт крутой подъём. Работники устают быстрее, растёт риск срыва груза и травм. Мы видели случаи, когда рампу длиной 1,5 м использовали для кузова высотой 1,2 м — угол составлял 53°, работать было опасно.</p>
+<p><strong>Правило:</strong> угол не более 12° для погрузчика, не более 10° для ручной тележки.</p>
+
+<h2>Ошибка 3: Игнорирование ширины</h2>
+<p>«Рампа 600 мм шириной — достаточно, вилы у рохли 520 мм». Это ошибочное рассуждение. При движении рохля может отклоняться, и зазор 40 мм с каждой стороны — это уже риск падения с рампы. Ширина рампы должна быть <strong>на 15–20 см шире</strong> используемой техники.</p>
+
+<h2>Ошибка 4: Экономия на антискользящем покрытии</h2>
+<p>Гладкий стальной настил при намокании или инее превращается в каток. Рампы без рифления или перфорации становятся опасны при любых осадках. Покрытие — не опция, а требование охраны труда.</p>
+
+<h2>Ошибка 5: Несоответствие системы крепления</h2>
+<p>Купили рампу с крюками под европейский грузовик (высокий бампер), а работаете с Газелями (низкий бампер). В итоге рампа болтается и съезжает при нагрузке. Всегда проверяйте совместимость крепежа с вашим конкретным автопарком до покупки.</p>
+
+<h2>Ошибка 6: Покупка без сертификата</h2>
+<p>Рампа — это грузоподъёмное оборудование. При несчастном случае на производстве первое, что проверит инспектор — наличие сертификата соответствия и паспорта изделия с указанием грузоподъёмности. Оборудование без документов создаёт юридические риски для предприятия.</p>
+<p><strong>Вывод:</strong> требуйте у поставщика сертификат соответствия ГОСТ и паспорт изделия. Это не прихоть — это ваша защита.</p>
+
+<h2>Как не ошибиться при покупке</h2>
+<p>Свяжитесь с нашими специалистами — мы бесплатно поможем подобрать рампу под ваши задачи. За 14 лет работы мы разобрали тысячи запросов и знаем типичные ошибки наизусть.</p>`
+  }
+]
+
+async function seedArticles() {
+  try {
+    const existing = await sql`SELECT COUNT(*) as cnt FROM news`
+    if (existing[0]?.cnt > 0) return
+    for (const a of SEED_ARTICLES) {
+      try {
+        await sql`
+          INSERT INTO news (slug, title, excerpt, content, seo_title, seo_description, author, category, reading_time, is_published, published_at)
+          VALUES (${a.slug}, ${a.title}, ${a.excerpt}, ${a.content}, ${a.seo_title}, ${a.seo_description}, ${a.author}, ${a.category}, ${a.reading_time}, 1, CURRENT_TIMESTAMP)
+          ON CONFLICT (slug) DO NOTHING`
+      } catch (e) {}
+    }
+    console.log('✅ Blog seed articles inserted')
+  } catch (e) {
+    console.log('ℹ️ Blog seed skipped:', e)
+  }
+}
+
+// Run seed on startup
+seedArticles().catch(() => {})
 
 // ==========================================
 // SERVER STARTUP FOR NODE.JS
