@@ -5145,8 +5145,18 @@ async function seedArticles() {
   }
 }
 
-// Run seed on startup
-seedArticles().catch(() => {})
+// Apply blog migration and seed on startup
+async function runBlogMigration() {
+  try {
+    await sql`ALTER TABLE news ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'blog'`
+    await sql`ALTER TABLE news ADD COLUMN IF NOT EXISTS reading_time INTEGER DEFAULT 5`
+    console.log('✅ Blog migration applied')
+  } catch (e) {
+    console.log('ℹ️ Blog migration skipped:', e)
+  }
+}
+
+runBlogMigration().then(() => seedArticles()).catch(() => {})
 
 // ==========================================
 // SERVER STARTUP FOR NODE.JS
